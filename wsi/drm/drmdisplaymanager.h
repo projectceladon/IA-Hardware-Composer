@@ -71,7 +71,15 @@ class DrmDisplayManager : public HWCThread, public DisplayManager {
 
   void IgnoreUpdates() override;
 
-  void setDrmMaster() override;
+  bool IsDrmMasterByDefault() override;
+
+  void setDrmMaster(bool must_set) override;
+
+  void DropDrmMaster() override;
+
+  bool IsDrmMaster() override {
+    return drm_master_;
+  }
 
   uint32_t GetFD() const override {
     return fd_;
@@ -102,7 +110,7 @@ class DrmDisplayManager : public HWCThread, public DisplayManager {
  private:
   void HotPlugEventHandler();
   bool UpdateDisplayState();
-  std::vector<std::unique_ptr<NativeDisplay>> virtual_displays_;
+  std::map<uint32_t, std::unique_ptr<NativeDisplay>> virtual_displays_;
   std::unique_ptr<FrameBufferManager> frame_buffer_manager_;
   std::vector<std::unique_ptr<DrmDisplay>> displays_;
   std::shared_ptr<DisplayHotPlugEventCallback> callback_ = NULL;
@@ -115,6 +123,7 @@ class DrmDisplayManager : public HWCThread, public DisplayManager {
   bool release_lock_ = false;
   SpinLock spin_lock_;
   int connected_display_count_ = 0;
+  bool drm_master_ = false;
 };
 
 }  // namespace hwcomposer

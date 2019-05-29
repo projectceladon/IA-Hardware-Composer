@@ -106,6 +106,11 @@ void OverlayLayer::SetBuffer(HWCNativeHandle handle, int32_t acquire_fence,
     }
   } else {
     buffer->SetOriginalHandle(handle);
+    // need to update interlace info since interlace info is update frame by
+    // frame
+    if (buffer->GetUsage() == kLayerVideo)
+      buffer->SetInterlace(
+          resource_manager->GetNativeBufferHandler()->GetInterlace(handle));
   }
 
   buffer->SetDataSpace(dataspace_);
@@ -552,10 +557,10 @@ void OverlayLayer::Dump() {
   DUMPTRACE("Source crop %s", StringifyRect(source_crop_).c_str());
   DUMPTRACE("Display frame %s", StringifyRect(display_frame_).c_str());
   DUMPTRACE("Surface Damage %s", StringifyRect(surface_damage_).c_str());
-  if (imported_buffer_)
+  if (imported_buffer_) {
     DUMPTRACE("AquireFence: %d", imported_buffer_->acquire_fence_);
-
-  imported_buffer_->buffer_->Dump();
+    imported_buffer_->buffer_->Dump();
+  }
 }
 
 }  // namespace hwcomposer

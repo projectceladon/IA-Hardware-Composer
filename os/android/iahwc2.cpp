@@ -85,6 +85,23 @@ class IAHotPlugEventCallback : public hwcomposer::HotPlugCallback {
 
   void Callback(uint32_t display, bool connected) {
     if (display == 0) {
+#ifdef ENABLE_PANORAMA
+      char dispname[128];
+      uint32_t size = sizeof(dispname);
+      memset(dispname, 0, sizeof(dispname));
+      display_->GetDisplayName(&size, dispname);
+      if (strstr(dispname, "Panorama")) {
+        // Allow the hotplug events to be emitted.
+      } else {
+        if (notified_) {
+          return;
+        }
+
+        if (connected) {
+          notified_ = true;
+        }
+      }
+#else
       // SF expects primary display to be always
       // connected. Let's notify it first time and ignore
       // any followup status changes.
@@ -94,6 +111,7 @@ class IAHotPlugEventCallback : public hwcomposer::HotPlugCallback {
 
       if (connected)
         notified_ = true;
+#endif
     }
 
     auto hook = reinterpret_cast<HWC2_PFN_HOTPLUG>(hook_);
@@ -207,7 +225,7 @@ HWC2::Error IAHWC2::CreateVirtualDisplay(uint32_t width, uint32_t height,
   temp->InitVirtualDisplay(device_.CreateVirtualDisplay(virtual_display_index_),
                            width, height, virtual_display_index_,
                            disable_explicit_sync_);
-  virtual_displays_.emplace_back(std::move(temp));
+  virtual_displays_.emplace(virtual_display_index_, std::move(temp));
   virtual_display_index_++;
 
   if (*format == HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED) {
@@ -227,6 +245,8 @@ HWC2::Error IAHWC2::DestroyVirtualDisplay(hwc2_display_t display) {
   device_.DestroyVirtualDisplay(display - HWC_DISPLAY_VIRTUAL - VDS_OFFSET);
   virtual_displays_.at(display - HWC_DISPLAY_VIRTUAL - VDS_OFFSET)
       .reset(nullptr);
+  virtual_displays_.erase(display - HWC_DISPLAY_VIRTUAL - VDS_OFFSET);
+  virtual_display_index_--;
 
   return HWC2::Error::None;
 }
@@ -662,7 +682,7 @@ HWC2::Error IAHWC2::HwcDisplay::PresentDisplay(int32_t *retire_fence) {
     layers.emplace_back(l.second->GetLayer());
   }
 
-  if (layers.empty())
+  if (layers.empty() && display_->Type() != DisplayType::kLogical)
     return HWC2::Error::None;
 
   IHOTPLUGEVENTTRACE("PhysicalDisplay called for Display: %p \n", display_);
@@ -1259,6 +1279,16 @@ void IAHWC2::DisableHDCPSessionForDisplay(uint32_t connector) {
 void IAHWC2::DisableHDCPSessionForAllDisplays() {
   device_.DisableHDCPSessionForAllDisplays();
 }
+
+#ifdef ENABLE_PANORAMA
+void IAHWC2::TriggerPanorama(uint32_t hotplug_simulation) {
+  device_.TriggerPanorama(hotplug_simulation);
+}
+
+void IAHWC2::ShutdownPanorama(uint32_t hotplug_simulation) {
+  device_.ShutdownPanorama(hotplug_simulation);
+}
+#endif
 
 void IAHWC2::SetPAVPSessionStatus(bool enabled, uint32_t papv_session_id,
                                   uint32_t pavp_instance_id) {

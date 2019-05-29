@@ -45,6 +45,7 @@ DrmDisplayManager::DrmDisplayManager() : HWCThread(-8, "DisplayManager") {
 DrmDisplayManager::~DrmDisplayManager() {
   CTRACE();
   std::vector<std::unique_ptr<DrmDisplay>>().swap(displays_);
+
 #ifndef DISABLE_HOTPLUG_NOTIFICATION
   close(hotplug_fd_);
 #endif
@@ -112,6 +113,7 @@ bool DrmDisplayManager::Initialize() {
 
   fd_handler_.AddFd(hotplug_fd_);
 #endif
+
   IHOTPLUGEVENTTRACE("DisplayManager Initialization succeeded.");
   return true;
 }
@@ -388,9 +390,8 @@ NativeDisplay *DrmDisplayManager::CreateVirtualDisplay(uint32_t display_index) {
   NativeDisplay *latest_display;
   std::unique_ptr<VirtualDisplay> display(
       new VirtualDisplay(fd_, buffer_handler_.get(), display_index, 0));
-  virtual_displays_.emplace_back(std::move(display));
-  size_t size = virtual_displays_.size();
-  latest_display = virtual_displays_.at(size - 1).get();
+  virtual_displays_.emplace(display_index, std::move(display));
+  latest_display = virtual_displays_.at(display_index).get();
   spin_lock_.unlock();
   return latest_display;
 }
@@ -398,6 +399,7 @@ NativeDisplay *DrmDisplayManager::CreateVirtualDisplay(uint32_t display_index) {
 void DrmDisplayManager::DestroyVirtualDisplay(uint32_t display_index) {
   spin_lock_.lock();
   virtual_displays_.at(display_index).reset(nullptr);
+  virtual_displays_.erase(display_index);
   spin_lock_.unlock();
 }
 
@@ -442,15 +444,72 @@ void DrmDisplayManager::IgnoreUpdates() {
   }
 }
 
-void DrmDisplayManager::setDrmMaster() {
-  int ret = drmSetMaster(fd_);
-  while (ret) {
-    usleep(10000);
+bool DrmDisplayManager::IsDrmMasterByDefault() {
+  spin_lock_.lock();
+  if (drm_master_) {
+    spin_lock_.unlock();
+    return drm_master_;
+  }
+  drm_magic_t magic = 0;
+  int ret = 0;
+  ret = drmGetMagic(fd_, &magic);
+  if (ret)
+    ETRACE("Failed to call drmGetMagic : %s", PRINTERROR());
+  else {
+    ret = drmAuthMagic(fd_, magic);
+    if (ret)
+      ETRACE("Failed to call drmAuthMagic : %s", PRINTERROR());
+    else
+      drm_master_ = true;
+  }
+  spin_lock_.unlock();
+  return drm_master_;
+}
+
+void DrmDisplayManager::setDrmMaster(bool must_set) {
+  spin_lock_.lock();
+  if (drm_master_) {
+    spin_lock_.unlock();
+    return;
+  }
+  int ret = 0;
+  uint8_t retry_times = 0;
+  do {
     ret = drmSetMaster(fd_);
+    if (!must_set)
+      retry_times++;
     if (ret) {
       ETRACE("Failed to call drmSetMaster : %s", PRINTERROR());
+      drm_master_ = false;
+      usleep(10000);
+    } else {
+      ITRACE("Successfully set as DRM master.");
+      drm_master_ = true;
     }
+  } while (ret && retry_times < 10);
+  spin_lock_.unlock();
+}
+
+void DrmDisplayManager::DropDrmMaster() {
+  spin_lock_.lock();
+  if (!drm_master_) {
+    spin_lock_.unlock();
+    return;
   }
+  int ret = 0;
+  uint8_t retry_times = 0;
+  do {
+    ret = drmDropMaster(fd_);
+    retry_times++;
+    if (ret) {
+      ETRACE("Failed to call drmDropMaster : %s", PRINTERROR());
+      usleep(10000);
+    } else {
+      ITRACE("Successfully drop DRM master.");
+      drm_master_ = false;
+    }
+  } while (ret && retry_times < 10);
+  spin_lock_.unlock();
 }
 
 void DrmDisplayManager::HandleLazyInitialization() {
@@ -545,14 +604,9 @@ FrameBufferManager *DrmDisplayManager::GetFrameBufferManager() {
 #ifdef ENABLE_PANORAMA
 NativeDisplay *DrmDisplayManager::CreateVirtualPanoramaDisplay(
     uint32_t display_index) {
-  spin_lock_.lock();
   NativeDisplay *latest_display;
-  std::unique_ptr<VirtualPanoramaDisplay> display(
-      new VirtualPanoramaDisplay(fd_, buffer_handler_.get(), display_index, 0));
-  virtual_displays_.emplace_back(std::move(display));
-  size_t size = virtual_displays_.size();
-  latest_display = virtual_displays_.at(size - 1).get();
-  spin_lock_.unlock();
+  latest_display = (NativeDisplay *)new VirtualPanoramaDisplay(
+      fd_, buffer_handler_.get(), display_index, 0);
   return latest_display;
 }
 #endif

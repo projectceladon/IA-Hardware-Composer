@@ -59,6 +59,10 @@ class IAHWC2 : public hwc2_device_t {
   void DisableHDCPSessionForDisplay(uint32_t connector);
 
   void DisableHDCPSessionForAllDisplays();
+#ifdef ENABLE_PANORAMA
+  void TriggerPanorama(uint32_t hotplug_simulation);
+  void ShutdownPanorama(uint32_t hotplug_simulation);
+#endif
 
   void SetPAVPSessionStatus(bool enabled, uint32_t pavp_session_id,
                             uint32_t pavp_instance_id);
@@ -321,7 +325,7 @@ class IAHWC2 : public hwc2_device_t {
   hwcomposer::GpuDevice &device_ = GpuDevice::getInstance();
   std::vector<std::unique_ptr<HwcDisplay>> extended_displays_;
   HwcDisplay primary_display_;
-  std::vector<std::unique_ptr<HwcDisplay>> virtual_displays_;
+  std::map<uint32_t, std::unique_ptr<HwcDisplay>> virtual_displays_;
   uint32_t virtual_display_index_ = 0;
 
   bool disable_explicit_sync_ = false;
