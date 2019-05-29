@@ -53,7 +53,13 @@ class DisplayManager {
   // manager until ForceRefresh is called.
   virtual void IgnoreUpdates() = 0;
 
-  virtual void setDrmMaster() = 0;
+  virtual bool IsDrmMasterByDefault() = 0;
+
+  virtual void setDrmMaster(bool must_set) = 0;
+
+  virtual void DropDrmMaster() = 0;
+
+  virtual bool IsDrmMaster() = 0;
 
   // Get FD associated with this DisplayManager.
   virtual uint32_t GetFD() const = 0;
