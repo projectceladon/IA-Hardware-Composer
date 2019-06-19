@@ -130,6 +130,15 @@ bool GpuDevice::EnableDRMCommit(bool enable, uint32_t display_id) {
   return ret;
 }
 
+void GpuDevice::MarkDisplayForFirstCommit() {
+  size_t size = total_displays_.size();
+  for (size_t i = 0; i < size; i++) {
+    if (total_displays_.at(i)->IsConnected()) {
+      total_displays_.at(i)->MarkFirstCommit();
+    }
+  }
+}
+
 bool GpuDevice::ResetDrmMaster(bool drop_master) {
   bool ret = true;
   if (drop_master) {
@@ -149,6 +158,7 @@ bool GpuDevice::ResetDrmMaster(bool drop_master) {
   // In case of setDrmMaster or the lock file is not exist.
   // Re-set DRM Master true.
   display_manager_->setDrmMaster(false);
+  MarkDisplayForFirstCommit();
   ResetAllDisplayCommit(true);
   DisableWatch();
 
@@ -390,6 +400,8 @@ void GpuDevice::ParseLogicalDisplaySetting(
       logical_split_str.find_first_not_of("0123456789") != std::string::npos)
     return;
   uint32_t physical_index = atoi(physical_index_str.c_str());
+  if (physical_index < 0)
+    return;
   uint32_t logical_split_num = atoi(logical_split_str.c_str());
   if (logical_split_num <= 1)
     return;

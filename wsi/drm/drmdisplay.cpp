@@ -16,6 +16,7 @@
 
 #include "drmdisplay.h"
 
+#include <sys/time.h>
 #include <cmath>
 #include <limits>
 #include <set>
@@ -133,6 +134,7 @@ void DrmDisplay::DrmConnectorGetDCIP3Support(
 
   edid = (uint8_t *)blob->data;
   if (!edid) {
+    drmModeFreePropertyBlob(blob);
     return;
   }
 
@@ -151,6 +153,66 @@ void DrmDisplay::DrmConnectorGetDCIP3Support(
   drmModeFreePropertyBlob(blob);
 
   return;
+}
+
+void DrmDisplay::GetEDIDDisplayData(const ScopedDrmObjectPropertyPtr &props) {
+  uint8_t *edid = NULL;
+  uint64_t edid_blob_id;
+  struct edid_display_data display_data[4];
+  drmModePropertyBlobPtr blob;
+
+  GetDrmObjectPropertyValue("EDID", props, &edid_blob_id);
+  blob = drmModeGetPropertyBlob(gpu_fd_, edid_blob_id);
+  if (!blob) {
+    return;
+  }
+
+  edid = (uint8_t *)blob->data;
+  if (!edid) {
+    return;
+  }
+  std::memset(display_data, 0, sizeof(display_data));
+  std::memcpy((void *)display_data, (void *)(edid + 54),
+              sizeof(edid_display_data) * 4);
+
+  for (int i = 0; i < 4; i++) {
+    if (!(display_data[i].indicate == 0x0000 &&
+          display_data[i].reserved1 == 0x00 &&
+          display_data[i].reserved2 == 0x00))
+      continue;
+
+    if (display_data[i].tag_number == 0xfc) {
+      display_name_.clear();
+      size_t display_desc_size =
+          sizeof(((struct edid_display_data *)0)->desc_data);
+      size_t display_desc_str_size =
+          strchrnul((char *)display_data[i].desc_data, '\n') -
+          (char *)display_data[i].desc_data;
+      size_t display_desc_copy_size = display_desc_str_size > display_desc_size
+                                          ? display_desc_size
+                                          : display_desc_str_size;
+      display_name_.assign((char *)display_data[i].desc_data,
+                           display_desc_copy_size);
+    }
+  }
+
+  ITRACE("Got EDID display name \"%s\"\n", display_name_.c_str());
+}
+
+/*
+* Check limited monitors exposing some modes which not
+* be supported by monitor hardware actually. Limited monitors
+* be defined in HWC_LIMITED_MONITOR_LIST.
+*/
+bool DrmDisplay::CheckLimitedMonitor() {
+  for (unsigned int i = 0; i < HWC_LIMITED_MONITOR_LIST.size(); ++i) {
+    if (display_name_.compare(HWC_LIMITED_MONITOR_LIST[i]) == 0) {
+      ITRACE("Got a limited monitor: %s\n",
+             HWC_LIMITED_MONITOR_LIST[i].c_str());
+      return true;
+    }
+  }
+  return false;
 }
 
 bool DrmDisplay::ConnectDisplay(const drmModeModeInfo &mode_info,
@@ -229,6 +291,8 @@ bool DrmDisplay::ConnectDisplay(const drmModeModeInfo &mode_info,
   } else {
     ITRACE("DCIP3 support not available");
   }
+
+  GetEDIDDisplayData(connector_props);
 
   PhysicalDisplay::Connect();
   SetHDCPState(desired_protection_support_, content_type_);
@@ -488,6 +552,14 @@ bool DrmDisplay::ContainConnector(const uint32_t connector_id) {
   return (connector_ == connector_id);
 }
 
+void DrmDisplay::TraceFirstCommit() {
+  struct timeval te;
+  gettimeofday(&te, NULL);  // get current time
+  long long milliseconds =
+      te.tv_sec * 1000LL + te.tv_usec / 1000;  // calculate milliseconds
+  ITRACE("First frame is Committed at %lld.", milliseconds);
+}
+
 bool DrmDisplay::Commit(
     const DisplayPlaneStateList &composition_planes,
     const DisplayPlaneStateList &previous_composition_planes,
@@ -505,6 +577,10 @@ bool DrmDisplay::Commit(
     ETRACE("Failed to allocate property set %d", -ENOMEM);
     return false;
   }
+
+  // Disable not-in-used plane once DRM master is reset
+  if (first_commit_)
+    display_queue_->ResetPlanes(pset.get());
 
   if (display_state_ & kNeedsModeset) {
     if (!ApplyPendingModeset(pset.get())) {
@@ -537,7 +613,10 @@ bool DrmDisplay::Commit(
     *commit_fence = 0;
   }
 #endif
-
+  if (first_commit_) {
+    TraceFirstCommit();
+    first_commit_ = false;
+  }
   return true;
 }
 
@@ -565,8 +644,14 @@ bool DrmDisplay::CommitFrame(
         comp_plane.GetRotationType();
     if ((plane_transform != kIdentity) &&
         (rotation_type == DisplayPlaneState::RotationType::kDisplayRotation)) {
-      HwcRect<int> rotated_rect =
-          RotateScaleRect(display_rect, width_, height_, plane_transform);
+      HwcRect<int> rotated_rect;
+      if (layer->IsVideoLayer()) {
+        rotated_rect =
+            RotateRect(display_rect, width_, height_, plane_transform);
+      } else {
+        rotated_rect =
+            RotateScaleRect(display_rect, width_, height_, plane_transform);
+      }
       layer->SetDisplayFrame(rotated_rect);
     }
 
@@ -588,7 +673,6 @@ bool DrmDisplay::CommitFrame(
     DrmPlane *plane = static_cast<DrmPlane *>(comp_plane.GetDisplayPlane());
     if (plane->InUse())
       continue;
-
     plane->Disable(pset);
   }
 
@@ -621,7 +705,6 @@ void DrmDisplay::SetDrmModeInfo(const std::vector<drmModeModeInfo> &mode_info) {
 #endif
       modes_.emplace_back(mode_info[i]);
   }
-
   SPIN_UNLOCK(display_lock_);
 }
 
@@ -660,8 +743,10 @@ void DrmDisplay::GetDrmObjectProperty(const char *name,
     ScopedDrmPropertyPtr property(drmModeGetProperty(gpu_fd_, props->props[i]));
     if (property && !strcmp(property->name, name)) {
       *id = property->prop_id;
+      property.reset();
       break;
     }
+    property.reset();
   }
   if (!(*id))
     ETRACE("Could not find property %s", name);
@@ -689,8 +774,10 @@ void DrmDisplay::GetDrmHDCPObjectProperty(
           }
         }
       }
+      property.reset();
       break;
     }
+    property.reset();
   }
   if (!(*id))
     ETRACE("Could not find property %s", name);
@@ -704,8 +791,10 @@ void DrmDisplay::GetDrmObjectPropertyValue(
     ScopedDrmPropertyPtr property(drmModeGetProperty(gpu_fd_, props->props[i]));
     if (property && !strcmp(property->name, name)) {
       *value = props->prop_values[i];
+      property.reset();
       break;
     }
+    property.reset();
   }
   if (!(*value))
     ETRACE("Could not find property value %s", name);
@@ -1045,11 +1134,14 @@ bool DrmDisplay::PopulatePlanes(
         drmModeGetPlane(gpu_fd_, plane_resources->planes[i]));
     if (!drm_plane) {
       ETRACE("Failed to get plane ");
+      plane_resources.reset();
       return false;
     }
 
-    if (!(pipe_bit & drm_plane->possible_crtcs))
+    if (!(pipe_bit & drm_plane->possible_crtcs)) {
+      drm_plane.reset();
       continue;
+    }
 
     uint32_t formats_size = drm_plane->count_formats;
     plane_ids.insert(drm_plane->plane_id);
@@ -1061,7 +1153,7 @@ bool DrmDisplay::PopulatePlanes(
 
     bool use_modifier = true;
 #ifdef MODIFICATOR_WA
-    use_modifier = (manager_->GetConnectedPhysicalDisplayCount() < 3);
+    use_modifier = (manager_->GetConnectedPhysicalDisplayCount() < 2);
     if (i >= 2)
       use_modifier = false;
 #endif
@@ -1072,10 +1164,13 @@ bool DrmDisplay::PopulatePlanes(
         overlay_planes.emplace_back(plane.release());
       }
     }
+
+    drm_plane.reset();
   }
 
   if (overlay_planes.empty()) {
     ETRACE("Failed to get primary plane for display %d", crtc_id_);
+    plane_resources.reset();
     return false;
   }
 
@@ -1089,6 +1184,7 @@ bool DrmDisplay::PopulatePlanes(
     overlay_planes.emplace_back(cursor_plane.release());
   }
 
+  plane_resources.reset();
   return true;
 }
 

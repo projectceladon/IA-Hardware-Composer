@@ -129,6 +129,12 @@ class DrmDisplay : public PhysicalDisplay {
     return planes_updated_;
   }
 
+  void MarkFirstCommit() override {
+    first_commit_ = true;
+  }
+
+  bool CheckLimitedMonitor();
+
  private:
   void ShutDownPipe();
   void GetDrmObjectPropertyValue(const char *name,
@@ -161,6 +167,9 @@ class DrmDisplay : public PhysicalDisplay {
   std::vector<uint8_t *> FindExtendedBlocksForTag(uint8_t *edid,
                                                   uint8_t block_tag);
   void DrmConnectorGetDCIP3Support(const ScopedDrmObjectPropertyPtr &props);
+  void GetEDIDDisplayData(const ScopedDrmObjectPropertyPtr &props);
+
+  void TraceFirstCommit();
 
   uint32_t crtc_id_ = 0;
   uint32_t mmWidth_ = 0;
@@ -188,6 +197,8 @@ class DrmDisplay : public PhysicalDisplay {
   int64_t broadcastrgb_automatic_ = -1;
   uint32_t flags_ = DRM_MODE_ATOMIC_ALLOW_MODESET;
   bool planes_updated_ = false;
+  bool first_commit_ = false;
+  std::string display_name_;
   HWCContentProtection current_protection_support_ =
       HWCContentProtection::kUnSupported;
   HWCContentProtection desired_protection_support_ =
