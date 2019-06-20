@@ -949,12 +949,9 @@ HWC2::Error IAHWC2::Hwc2Layer::SetLayerSurfaceDamage(hwc_region_t damage) {
   hwcomposer::HwcRegion hwc_region;
 
   for (size_t rect = 0; rect < num_rects; ++rect) {
-    if (!(damage.rects[rect].left == 0 && damage.rects[rect].top == 0 &&
-          damage.rects[rect].right == 0 && damage.rects[rect].bottom == 0)) {
-      hwc_region.emplace_back(damage.rects[rect].left, damage.rects[rect].top,
-                              damage.rects[rect].right,
-                              damage.rects[rect].bottom);
-    }
+    hwc_region.emplace_back(damage.rects[rect].left, damage.rects[rect].top,
+                            damage.rects[rect].right,
+                            damage.rects[rect].bottom);
   }
 
   hwc_layer_.SetSurfaceDamage(hwc_region);
@@ -1233,6 +1230,7 @@ int IAHWC2::HookDevOpen(const struct hw_module_t *module, const char *name,
   HWC2::Error err = ctx->Init();
   if (err != HWC2::Error::None) {
     ALOGE("Failed to initialize IAHWC2 err=%d\n", err);
+    ctx.reset();
     return -EINVAL;
   }
 
@@ -1309,6 +1307,10 @@ uint32_t IAHWC2::GetDisplayIDFromConnectorID(const uint32_t connector_id) {
 
 bool IAHWC2::EnableDRMCommit(bool enable, uint32_t display_id) {
   return device_.EnableDRMCommit(enable, display_id);
+}
+
+bool IAHWC2::ResetDrmMaster(bool drop_master) {
+  return device_.ResetDrmMaster(drop_master);
 }
 
 void IAHWC2::SetHDCPSRMForDisplay(uint32_t connector, const int8_t *SRM,
