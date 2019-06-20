@@ -19,7 +19,7 @@
 #include <hwcdefs.h>
 #include <hwclayer.h>
 #include <math.h>
-
+#include <sys/time.h>
 #include <vector>
 
 #include "displayplanemanager.h"
@@ -545,6 +545,8 @@ void DisplayQueue::InitializeOverlayLayers(
 
     layers.emplace_back();
     OverlayLayer* overlay_layer = &(layers.back());
+    if (refrsh_display_id_ > 0)
+      overlay_layer->SetForceContentChanged();
     OverlayLayer* previous_layer = NULL;
     if (previous_size > z_order) {
       previous_layer = &(in_flight_layers_.at(z_order));
@@ -568,12 +570,14 @@ void DisplayQueue::InitializeOverlayLayers(
 
       overlay_layer->InitializeFromScaledHwcLayer(
           layer, resource_manager_.get(), previous_layer, z_order, layer_index,
-          display_frame, display_plane_manager_->GetHeight(), plane_transform_,
+          display_frame, display_plane_manager_->GetHeight(),
+          display_plane_manager_->GetWidth(), plane_transform_,
           handle_constraints);
     } else {
       overlay_layer->InitializeFromHwcLayer(
           layer, resource_manager_.get(), previous_layer, z_order, layer_index,
-          display_plane_manager_->GetHeight(), plane_transform_,
+          display_plane_manager_->GetHeight(),
+          display_plane_manager_->GetWidth(), plane_transform_,
           handle_constraints);
     }
 
@@ -899,10 +903,11 @@ bool DisplayQueue::QueueUpdate(std::vector<HwcLayer*>& source_layers,
 
   int32_t fence = 0;
   bool fence_released = false;
-  if (!IsIgnoreUpdates())
+  if (!IsIgnoreUpdates()) {
     composition_passed = display_->Commit(
         current_composition_planes, previous_plane_state_, disable_explictsync,
         kms_fence_, &fence, &fence_released);
+  }
 
   if (fence_released) {
     kms_fence_ = 0;
@@ -1246,6 +1251,10 @@ void DisplayQueue::SetCloneMode(bool cloned) {
 
   clone_mode_ = cloned;
   clone_rendered_ = false;
+}
+
+void DisplayQueue::ResetPlanes(drmModeAtomicReqPtr pset) {
+  display_plane_manager_->ResetPlanes(pset);
 }
 
 void DisplayQueue::IgnoreUpdates() {

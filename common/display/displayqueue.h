@@ -110,6 +110,8 @@ class DisplayQueue {
 
   void IgnoreUpdates();
 
+  void ResetPlanes(drmModeAtomicReqPtr pset);
+
   void PresentClonedCommit(DisplayQueue* queue);
 
   const DisplayPlaneStateList& GetCurrentCompositionPlanes() const {

@@ -49,15 +49,16 @@ struct OverlayLayer {
   void InitializeFromHwcLayer(HwcLayer* layer, ResourceManager* buffer_manager,
                               OverlayLayer* previous_layer, uint32_t z_order,
                               uint32_t layer_index, uint32_t max_height,
-                              uint32_t rotation, bool handle_constraints);
+                              uint32_t max_width, uint32_t rotation,
+                              bool handle_constraints);
 
   void InitializeFromScaledHwcLayer(HwcLayer* layer,
                                     ResourceManager* buffer_manager,
                                     OverlayLayer* previous_layer,
                                     uint32_t z_order, uint32_t layer_index,
                                     const HwcRect<int>& display_frame,
-                                    uint32_t max_height, uint32_t rotation,
-                                    bool handle_constraints);
+                                    uint32_t max_height, uint32_t max_width,
+                                    uint32_t rotation, bool handle_constraints);
   // Get z order of this layer.
   uint32_t GetZorder() const {
     return z_order_;
@@ -87,12 +88,18 @@ struct OverlayLayer {
     return transform_;
   }
 
+  // This represents hwc transform setting for this
+  // display on which this layer is being shown.
+  uint32_t GetPlaneTransform() const {
+    return plane_transform_;
+  }
+
   // This represents any transform applied
   // to this layer(i.e. GetTransform()) + overall
   // rotation applied to the display on which this
   // layer is being shown.
-  uint32_t GetPlaneTransform() const {
-    return plane_transform_;
+  uint32_t GetMergedTransform() const {
+    return merged_transform_;
   }
 
   // Applies transform to this layer before scanout.
@@ -116,11 +123,17 @@ struct OverlayLayer {
   }
 
   const HwcRect<int>& GetSurfaceDamage() const {
-    return surface_damage_;
+    if (force_content_changed_)
+      return display_frame_;
+    else
+      return surface_damage_;
   }
 
   HwcRect<int>& GetSurfaceDamage() {
-    return surface_damage_;
+    if (force_content_changed_)
+      return display_frame_;
+    else
+      return surface_damage_;
   }
 
   uint32_t GetSourceCropWidth() const {
@@ -245,6 +258,10 @@ struct OverlayLayer {
   void CloneLayer(const OverlayLayer* layer, const HwcRect<int>& display_frame,
                   ResourceManager* resource_manager, uint32_t z_order);
 
+  void SetForceContentChanged() {
+    force_content_changed_ = true;
+  }
+
   void Dump();
 
  private:
@@ -277,13 +294,18 @@ struct OverlayLayer {
 
   void ValidateTransform(uint32_t transform, uint32_t display_transform);
 
+  void TransformDamage(HwcLayer* layer, uint32_t max_height,
+                       uint32_t max_width);
+
   void InitializeState(HwcLayer* layer, ResourceManager* buffer_manager,
                        OverlayLayer* previous_layer, uint32_t z_order,
                        uint32_t layer_index, uint32_t max_height,
-                       uint32_t rotation, bool handle_constraints);
+                       uint32_t max_width, uint32_t rotation,
+                       bool handle_constraints);
 
   uint32_t transform_ = 0;
   uint32_t plane_transform_ = 0;
+  uint32_t merged_transform_ = 0;
   uint32_t z_order_ = 0;
   uint32_t layer_index_ = 0;
   uint32_t source_crop_width_ = 0;
@@ -294,6 +316,7 @@ struct OverlayLayer {
   uint32_t dataspace_ = 0;
 
   uint32_t solid_color_ = 0;
+  bool force_content_changed_ = false;
 
   HwcRect<float> source_crop_;
   HwcRect<int> display_frame_;
