@@ -141,7 +141,6 @@ LOCAL_C_INCLUDES += \
 else
 LOCAL_CPPFLAGS += \
 	-DUSE_GL \
-	-DENABLE_RBC
 endif
 
 ifneq ($(strip $(HWC_DISABLE_VA_DRIVER)), true)
