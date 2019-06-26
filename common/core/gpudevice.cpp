@@ -399,9 +399,9 @@ void GpuDevice::ParseLogicalDisplaySetting(
   if (logical_split_str.empty() ||
       logical_split_str.find_first_not_of("0123456789") != std::string::npos)
     return;
-  uint32_t physical_index = atoi(physical_index_str.c_str());
-  if (physical_index < 0)
+  if (physical_index_str.length() > 1)
     return;
+  uint32_t physical_index = atoi(physical_index_str.c_str());
   uint32_t logical_split_num = atoi(logical_split_str.c_str());
   if (logical_split_num <= 1)
     return;
