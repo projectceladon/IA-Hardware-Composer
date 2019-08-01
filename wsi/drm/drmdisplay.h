@@ -133,8 +133,6 @@ class DrmDisplay : public PhysicalDisplay {
     first_commit_ = true;
   }
 
-  bool CheckLimitedMonitor();
-
  private:
   void ShutDownPipe();
   void GetDrmObjectPropertyValue(const char *name,
@@ -167,9 +165,11 @@ class DrmDisplay : public PhysicalDisplay {
   std::vector<uint8_t *> FindExtendedBlocksForTag(uint8_t *edid,
                                                   uint8_t block_tag);
   void DrmConnectorGetDCIP3Support(const ScopedDrmObjectPropertyPtr &props);
-  void GetEDIDDisplayData(const ScopedDrmObjectPropertyPtr &props);
 
   void TraceFirstCommit();
+
+  uint32_t FindPreferedDisplayMode(size_t modes_size);
+  uint32_t FindPerformaceDisplayMode(size_t modes_size);
 
   uint32_t crtc_id_ = 0;
   uint32_t mmWidth_ = 0;
@@ -198,6 +198,8 @@ class DrmDisplay : public PhysicalDisplay {
   uint32_t flags_ = DRM_MODE_ATOMIC_ALLOW_MODESET;
   bool planes_updated_ = false;
   bool first_commit_ = false;
+  uint32_t prefer_display_mode_ = 0;
+  uint32_t perf_display_mode_ = 0;
   std::string display_name_ = "";
   HWCContentProtection current_protection_support_ =
       HWCContentProtection::kUnSupported;
