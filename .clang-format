@@ -1,6 +1,7 @@
 BasedOnStyle: Google
+AllowAllParametersOfDeclarationOnNextLine: false
 AllowShortIfStatementsOnASingleLine: false
 AllowShortLoopsOnASingleLine: false
 AllowShortFunctionsOnASingleLine: None
-# Pointer alignment works for clang version 5.0 and up.
-PointerAlignment: Right
+PenaltyBreakAssignment: 10000000
+PenaltyBreakBeforeFirstCallParameter: 1000
