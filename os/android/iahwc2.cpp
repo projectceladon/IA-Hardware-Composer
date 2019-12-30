@@ -230,14 +230,42 @@ static inline void supported(char const *func) {
 HWC2::Error IAHWC2::CreateVirtualDisplay(uint32_t width, uint32_t height,
                                          int32_t *format,
                                          hwc2_display_t *display) {
-  *display = (hwc2_display_t)(virtual_display_index_ + HWC_DISPLAY_VIRTUAL +
-                              VDS_OFFSET);
+  if (NULL == display) {
+    ALOGE("Pointer of display is NULL");
+    return HWC2::Error::BadDisplay;
+  }
+
+  if (NULL == format) {
+    ALOGE("Pointer of format is NULL");
+    return HWC2::Error::BadParameter;
+  }
+
+  uint32_t free_display_index = 0;
+
+  spin_lock_.lock();
+
+  for (uint32_t disp_index = 0; disp_index < virtual_display_index_;
+       disp_index++) {
+    auto it = virtual_displays_.find(disp_index);
+    if (it == virtual_displays_.end()) {
+      free_display_index = disp_index;
+      break;
+    }
+  }
+  if (!free_display_index) {
+    free_display_index = virtual_display_index_;
+    virtual_display_index_++;
+  }
+
+  *display =
+      (hwc2_display_t)(free_display_index + HWC_DISPLAY_VIRTUAL + VDS_OFFSET);
   std::unique_ptr<HwcDisplay> temp(new HwcDisplay());
-  temp->InitVirtualDisplay(device_.CreateVirtualDisplay(virtual_display_index_),
-                           width, height, virtual_display_index_,
+  temp->InitVirtualDisplay(device_.CreateVirtualDisplay(free_display_index),
+                           width, height, free_display_index,
                            disable_explicit_sync_);
-  virtual_displays_.emplace(virtual_display_index_, std::move(temp));
-  virtual_display_index_++;
+  virtual_displays_.emplace(free_display_index, std::move(temp));
+
+  spin_lock_.unlock();
 
   if (*format == HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED) {
     // fallback to RGBA_8888, align with framework requirement
@@ -257,11 +285,16 @@ HWC2::Error IAHWC2::DestroyVirtualDisplay(hwc2_display_t display) {
     return HWC2::Error::BadDisplay;
   }
 
-  device_.DestroyVirtualDisplay(display - HWC_DISPLAY_VIRTUAL - VDS_OFFSET);
-  virtual_displays_.at(display - HWC_DISPLAY_VIRTUAL - VDS_OFFSET)
-      .reset(nullptr);
-  virtual_displays_.erase(display - HWC_DISPLAY_VIRTUAL - VDS_OFFSET);
-  virtual_display_index_--;
+  uint32_t display_id = (uint32_t)display - HWC_DISPLAY_VIRTUAL - VDS_OFFSET;
+  spin_lock_.lock();
+  auto it = virtual_displays_.find(display_id);
+  if (it != virtual_displays_.end()) {
+    device_.DestroyVirtualDisplay(display - HWC_DISPLAY_VIRTUAL - VDS_OFFSET);
+    virtual_displays_.at(display - HWC_DISPLAY_VIRTUAL - VDS_OFFSET)
+        .reset(nullptr);
+    virtual_displays_.erase(display - HWC_DISPLAY_VIRTUAL - VDS_OFFSET);
+  }
+  spin_lock_.unlock();
 
   return HWC2::Error::None;
 }
@@ -638,6 +671,7 @@ HWC2::Error IAHWC2::HwcDisplay::PresentDisplay(int32_t *retire_fence) {
   bool use_client_layer = false;
   uint32_t client_z_order = 0;
   bool use_cursor_layer = false;
+  bool use_overlay_compose = false;
   uint32_t cursor_z_order = 0;
   IAHWC2::Hwc2Layer *cursor_layer;
   *retire_fence = -1;
@@ -660,6 +694,7 @@ HWC2::Error IAHWC2::HwcDisplay::PresentDisplay(int32_t *retire_fence) {
 #ifndef FORCE_ALL_DEVICE_TYPE
     if ((l.second.validated_type() == HWC2::Composition::Client) &&
         (l.second.GetLayer()->GetNativeHandle() == NULL)) {
+      use_client_layer = true;
       ICOMPOSITORTRACE(
           "Skip clinet layer without buffer which composed by SurfaceFlinger");
       continue;
@@ -675,6 +710,7 @@ HWC2::Error IAHWC2::HwcDisplay::PresentDisplay(int32_t *retire_fence) {
     switch (l.second.validated_type()) {
       case HWC2::Composition::Device:
       case HWC2::Composition::SolidColor:
+        use_overlay_compose = true;
         z_map.emplace(std::make_pair(l.second.z_order(), &l.second));
         ICOMPOSITORTRACE(
             "Add Device/SolidColor HWC2Layer[%d], displayFrame: %d, %d, %d, %d",
@@ -716,8 +752,10 @@ HWC2::Error IAHWC2::HwcDisplay::PresentDisplay(int32_t *retire_fence) {
     } else if (client_z_order > cursor_z_order) {
       cursor_z_order = client_z_order + 1;
     }
-    z_map.emplace(std::make_pair(cursor_z_order, cursor_layer));
-    ICOMPOSITORTRACE("Add Cursor HWC2Layer[%d]", cursor_z_order);
+    if (use_overlay_compose) {
+      z_map.emplace(std::make_pair(cursor_z_order, cursor_layer));
+      ICOMPOSITORTRACE("Add Cursor HWC2Layer[%d]", cursor_z_order);
+    }
   }
 
   std::vector<hwcomposer::HwcLayer *> layers;
@@ -971,6 +1009,8 @@ HWC2::Error IAHWC2::HwcDisplay::ValidateDisplay(uint32_t *num_types,
       if (l.second.sf_type() == HWC2::Composition::Device ||
           l.second.sf_type() == HWC2::Composition::SolidColor)
         z_map.emplace(std::make_pair(l.second.z_order(), l.first));
+      else
+        l.second.set_validated_type(HWC2::Composition::Client);
     }
 
     /*
@@ -983,6 +1023,10 @@ HWC2::Error IAHWC2::HwcDisplay::ValidateDisplay(uint32_t *num_types,
     for (std::pair<const uint32_t, hwc2_layer_t> &l : z_map) {
       if (!avail_planes--)
         break;
+#ifdef KVM_HWC_PROPERTY
+      if (IsKvmPlatform())
+        break;
+#endif
       if (layers_[l.second].sf_type() == HWC2::Composition::SolidColor) {
         layers_[l.second].set_validated_type(HWC2::Composition::SolidColor);
       } else {
@@ -990,8 +1034,8 @@ HWC2::Error IAHWC2::HwcDisplay::ValidateDisplay(uint32_t *num_types,
       }
     }
 
-    for (std::pair<const hwc2_layer_t, IAHWC2::Hwc2Layer> &l : layers_) {
-      IAHWC2::Hwc2Layer &layer = l.second;
+    for (std::pair<const uint32_t, hwc2_layer_t> &l : z_map) {
+      IAHWC2::Hwc2Layer &layer = layers_[l.second];
       // We can only handle layers of Device type, send everything else to SF
       if (layer.validated_type() != HWC2::Composition::Device &&
           layer.validated_type() != HWC2::Composition::SolidColor) {

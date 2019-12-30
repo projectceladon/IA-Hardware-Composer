@@ -226,7 +226,11 @@ bool DrmDisplayManager::UpdateDisplayState() {
     return false;
   }
 
+#ifndef USE_MUTEX
   spin_lock_.lock();
+#else
+  mLock.lock();
+#endif
   // Start of assuming no displays are connected
   for (auto &display : displays_) {
     if (device_.IsReservedDrmPlane() && !display->IsConnected())
@@ -377,7 +381,11 @@ bool DrmDisplayManager::UpdateDisplayState() {
     callback_->Callback(connected_displays);
   }
 
+#ifndef USE_MUTEX
   spin_lock_.unlock();
+#else
+  mLock.unlock();
+#endif
 #ifndef ENABLE_ANDROID_WA
   notify_client_ = true;
 #endif
@@ -397,7 +405,11 @@ bool DrmDisplayManager::UpdateDisplayState() {
 }
 
 void DrmDisplayManager::NotifyClientsOfDisplayChangeStatus() {
+#ifndef USE_MUTEX
   spin_lock_.lock();
+#else
+  std::lock_guard<std::mutex> lock(mLock);
+#endif
 
   for (auto &display : displays_) {
     if (!display->IsConnected()) {
@@ -411,47 +423,64 @@ void DrmDisplayManager::NotifyClientsOfDisplayChangeStatus() {
   notify_client_ = true;
 #endif
 
+#ifndef USE_MUTEX
   spin_lock_.unlock();
+#endif
 }
 
 NativeDisplay *DrmDisplayManager::CreateVirtualDisplay(uint32_t display_index) {
-  spin_lock_.lock();
   NativeDisplay *latest_display;
   std::unique_ptr<VirtualDisplay> display(
       new VirtualDisplay(fd_, buffer_handler_.get(), display_index, 0));
   virtual_displays_.emplace(display_index, std::move(display));
   latest_display = virtual_displays_.at(display_index).get();
-  spin_lock_.unlock();
   return latest_display;
 }
 
 void DrmDisplayManager::DestroyVirtualDisplay(uint32_t display_index) {
-  spin_lock_.lock();
-  virtual_displays_.at(display_index).reset(nullptr);
-  virtual_displays_.erase(display_index);
-  spin_lock_.unlock();
+  auto it = virtual_displays_.find(display_index);
+  if (it != virtual_displays_.end()) {
+    virtual_displays_.at(display_index).reset(nullptr);
+    virtual_displays_.erase(display_index);
+  }
 }
 
 std::vector<NativeDisplay *> DrmDisplayManager::GetAllDisplays() {
+#ifndef USE_MUTEX
   spin_lock_.lock();
+#else
+  std::lock_guard<std::mutex> lock(mLock);
+#endif
   std::vector<NativeDisplay *> all_displays;
   size_t size = displays_.size();
   for (size_t i = 0; i < size; ++i) {
     all_displays.emplace_back(displays_.at(i).get());
   }
+#ifndef USE_MUTEX
   spin_lock_.unlock();
+#endif
   return all_displays;
 }
 
 void DrmDisplayManager::RegisterHotPlugEventCallback(
     std::shared_ptr<DisplayHotPlugEventCallback> callback) {
+#ifndef USE_MUTEX
   spin_lock_.lock();
+#else
+  std::lock_guard<std::mutex> lock(mLock);
+#endif
   callback_ = callback;
+#ifndef USE_MUTEX
   spin_lock_.unlock();
+#endif
 }
 
 void DrmDisplayManager::ForceRefresh() {
+#ifndef USE_MUTEX
   spin_lock_.lock();
+#else
+  std::lock_guard<std::mutex> lock(mLock);
+#endif
   ignore_updates_ = false;
   size_t size = displays_.size();
   for (size_t i = 0; i < size; ++i) {
@@ -459,13 +488,23 @@ void DrmDisplayManager::ForceRefresh() {
   }
 
   release_lock_ = true;
+#ifndef USE_MUTEX
   spin_lock_.unlock();
+#endif
 }
 
 void DrmDisplayManager::IgnoreUpdates() {
+#ifndef USE_MUTEX
   spin_lock_.lock();
+#else
+  mLock.lock();
+#endif
   ignore_updates_ = true;
+#ifndef USE_MUTEX
   spin_lock_.unlock();
+#else
+  mLock.unlock();
+#endif
 
   size_t size = displays_.size();
   for (size_t i = 0; i < size; ++i) {
@@ -474,7 +513,11 @@ void DrmDisplayManager::IgnoreUpdates() {
 }
 
 bool DrmDisplayManager::IsDrmMasterByDefault() {
+#ifndef USE_MUTEX
   spin_lock_.lock();
+#else
+  std::lock_guard<std::mutex> lock(mLock);
+#endif
   if (drm_master_) {
     spin_lock_.unlock();
     return drm_master_;
@@ -491,12 +534,18 @@ bool DrmDisplayManager::IsDrmMasterByDefault() {
     else
       drm_master_ = true;
   }
+#ifndef USE_MUTEX
   spin_lock_.unlock();
+#endif
   return drm_master_;
 }
 
 void DrmDisplayManager::setDrmMaster(bool must_set) {
+#ifndef USE_MUTEX
   spin_lock_.lock();
+#else
+  std::lock_guard<std::mutex> lock(mLock);
+#endif
   if (drm_master_) {
     spin_lock_.unlock();
     return;
@@ -516,13 +565,21 @@ void DrmDisplayManager::setDrmMaster(bool must_set) {
       drm_master_ = true;
     }
   } while (ret && retry_times < 10);
+#ifndef USE_MUTEX
   spin_lock_.unlock();
+#endif
 }
 
 void DrmDisplayManager::DropDrmMaster() {
+#ifndef USE_MUTEX
   spin_lock_.lock();
+#else
+  std::lock_guard<std::mutex> lock(mLock);
+#endif
   if (!drm_master_) {
+#ifndef USE_MUTEX
     spin_lock_.unlock();
+#endif
     return;
   }
   int ret = 0;
@@ -538,16 +595,24 @@ void DrmDisplayManager::DropDrmMaster() {
       drm_master_ = false;
     }
   } while (ret && retry_times < 10);
+#ifndef USE_MUTEX
   spin_lock_.unlock();
+#endif
 }
 
 void DrmDisplayManager::HandleLazyInitialization() {
+#ifndef USE_MUTEX
   spin_lock_.lock();
+#else
+  std::lock_guard<std::mutex> lock(mLock);
+#endif
   if (release_lock_) {
     device_.DisableWatch();
     release_lock_ = false;
   }
+#ifndef USE_MUTEX
   spin_lock_.unlock();
+#endif
 }
 
 uint32_t DrmDisplayManager::GetConnectedPhysicalDisplayCount() {

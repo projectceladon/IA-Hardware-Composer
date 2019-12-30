@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "displayplanemanager.h"
+#include "gpudevice.h"
 #include "hwctrace.h"
 #include "hwcutils.h"
 #include "nativesurface.h"
@@ -269,23 +270,29 @@ void DisplayQueue::InitializeOverlayLayers(
       has_video_layer = true;
     }
     if (previous_layer) {
-#ifndef FORCE_ALL_DEVICE_TYPE
-      if ((overlay_layer->IsVideoLayer() != previous_layer->IsVideoLayer()) ||
-          (overlay_layer->IsSolidColor() != previous_layer->IsSolidColor()) ||
-          (overlay_layer->GetAlpha() != previous_layer->GetAlpha())) {
-#else
       if (overlay_layer->IsVideoLayer() != previous_layer->IsVideoLayer()) {
-#endif
         re_validate_begin = 0;
       }
-      // Does not need to re_validate
-      if (overlay_layer->NeedsRevalidation() &&
-          !(overlay_layer->IsCursorLayer() &&
-            previous_layer->IsCursorLayer())) {
-        if (re_validate_begin == size) {
-          re_validate_begin = layer_index;
+      if (re_validate_begin == size) {
+        bool need_revalidate =
+            overlay_layer->IsSolidColor() != previous_layer->IsSolidColor();
+        if (!need_revalidate) {
+          if (!(overlay_layer->IsCursorLayer() &&
+                previous_layer->IsCursorLayer())) {
+            if (IsLayerAlphaBlendingCommitted(overlay_layer) ^
+                IsLayerAlphaBlendingCommitted(previous_layer))
+              need_revalidate = true;
+            if (!need_revalidate) {
+              if (overlay_layer->NeedsRevalidation())
+                need_revalidate = true;
+            }
+          }
         }
+        if (need_revalidate)
+          re_validate_begin = layer_index;
       }
+    } else if (overlay_layer->IsVideoLayer()) {
+      re_validate_begin = 0;
     } else if (re_validate_begin == size) {
       re_validate_begin = layer_index;
     }
@@ -469,6 +476,11 @@ bool DisplayQueue::QueueUpdate(std::vector<HwcLayer*>& source_layers,
                                PixelUploaderCallback* call_back,
                                bool handle_constraints) {
   CTRACE();
+  if (!GpuDevice::getInstance().IsDrmMaster()) {
+    ITRACE("DRM master is not set, ignore queue update.");
+    return true;
+  }
+
   ScopedIdleStateTracker tracker(idle_tracker_, compositor_,
                                  resource_manager_.get(), this);
   if (tracker.IgnoreUpdate()) {
@@ -797,6 +809,11 @@ void DisplayQueue::SetReleaseFenceToLayers(
           int32_t temp = overlay_layer.GetAcquireFence();
           if (temp > 0) {
             layer->SetReleaseFence(dup(temp));
+          } else {
+            // [WA] set commit fence for video buffer as release fence
+            if (layer->IsVideoLayer()) {
+              layer->SetReleaseFence(dup(fence));
+            }
           }
         }
       }

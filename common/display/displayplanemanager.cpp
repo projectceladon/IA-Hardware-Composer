@@ -56,6 +56,8 @@ void DisplayPlaneManager::ResizeOverlays() {
       } else {
         total_overlays_--;
       }
+    } else {
+      cursor_plane_ = NULL;
     }
   }
   IPLANERESERVEDTRACE(
@@ -110,7 +112,6 @@ bool DisplayPlaneManager::ValidateLayers(
                     layers.size());
       ForceVppForAllLayers(composition, layers, add_index, mark_later, false);
     }
-
     return true;
   }
 
@@ -120,7 +121,7 @@ bool DisplayPlaneManager::ValidateLayers(
   }
 
   // Let's mark all planes as free to be used.
-  for (auto j = overlay_begin; j != overlay_planes_.end(); ++j) {
+  for (auto j = overlay_begin; j < overlay_planes_.end(); ++j) {
     j->get()->SetInUse(false);
   }
 
@@ -230,12 +231,25 @@ bool DisplayPlaneManager::ValidateLayers(
           // Separate plane added
           composition.emplace_back(plane, layer, this);
           DisplayPlaneState &last_plane = composition.back();
+          ISURFACETRACE(
+              "Added Layer[%d] into separate plane[%d](NotInUse): %d %d "
+              "validate_final_layers: %d  \n",
+              layer->GetZorder(), last_plane.GetDisplayPlane()->id(),
+              layer->GetZorder(), composition.size(), validate_final_layers);
 
           // If we are able to composite buffer with the given plane, lets use
           // it.
-          bool fall_back = FallbacktoGPU(plane, layer, composition);
+          bool fall_back = false;
+          if (plane)
+            fall_back = FallbacktoGPU(plane, layer, composition);
           test_commit_done = true;
           if (fall_back) {
+            ISURFACETRACE(
+                "Force GPU rander the plane[%d], for the layer[%d] isVideo: "
+                "%d, isSolidColor: %d, alpha: %d",
+                last_plane.GetDisplayPlane()->id(), layer->GetZorder(),
+                layer->IsVideoLayer(), layer->IsSolidColor(),
+                layer->GetAlpha());
             last_plane.ForceGPURendering();
           }
         } else {
@@ -456,7 +470,8 @@ void DisplayPlaneManager::SetDisplayTransform(uint32_t transform) {
   display_transform_ = transform;
 }
 
-void DisplayPlaneManager::EnsureOffScreenTarget(DisplayPlaneState &plane) {
+void DisplayPlaneManager::EnsureOffScreenTarget(DisplayPlaneState &plane,
+                                                bool force_normal_surface) {
   NativeSurface *surface = NULL;
   // We only use media formats when video compostion for 1 layer
   int dest_x = plane.GetDisplayFrame().left;
@@ -466,7 +481,7 @@ void DisplayPlaneManager::EnsureOffScreenTarget(DisplayPlaneState &plane) {
       plane.IsVideoPlane() && (plane.GetSourceLayers().size() == 1);
   uint32_t preferred_format = 0;
   uint32_t usage = hwcomposer::kLayerNormal;
-  if (video_separate && !(dest_w % 2 || dest_x % 2)) {
+  if (video_separate && !(dest_w % 2 || dest_x % 2) && !force_normal_surface) {
     preferred_format = plane.GetDisplayPlane()->GetPreferredVideoFormat();
   } else {
     preferred_format = plane.GetDisplayPlane()->GetPreferredFormat();
@@ -505,7 +520,7 @@ void DisplayPlaneManager::EnsureOffScreenTarget(DisplayPlaneState &plane) {
 
   if (!surface) {
     NativeSurface *new_surface = NULL;
-    if (video_separate) {
+    if (video_separate && !force_normal_surface) {
 #ifdef SURFACE_RECYCLE_TRACING
       ISURFACERECYCLETRACE("CreateVideoSurface for plane[%d]",
                            plane.GetDisplayPlane()->id());
@@ -604,7 +619,7 @@ void DisplayPlaneManager::ForceVppForAllLayers(
   auto layer_end = layers.end();
   OverlayLayer *primary_layer = &(*(layer_begin));
   DisplayPlane *current_plane = overlay_planes_.at(composition.size()).get();
-  composition.emplace_back(current_plane, primary_layer, this);
+  composition.emplace_back(current_plane, primary_layer, this, true);
   DisplayPlaneState &last_plane = composition.back();
   layer_begin++;
   ISURFACETRACE("Added layer in ForceVPPForAllLayers: %d \n",
@@ -612,7 +627,7 @@ void DisplayPlaneManager::ForceVppForAllLayers(
 
   for (auto i = layer_begin; i != layer_end; ++i) {
     ISURFACETRACE("Added layer in ForceVPPForAllLayers: %d \n", i->GetZorder());
-    last_plane.AddLayer(&(*(i)));
+    last_plane.AddLayer(&(*(i)), true);
     i->SetLayerComposition(OverlayLayer::kGpu);
   }
   last_plane.SetVideoPlane(true);
@@ -650,7 +665,7 @@ void DisplayPlaneManager::ForceGpuForAllLayers(
   OverlayLayer *primary_layer = &(*(layers.begin()));
   DisplayPlane *current_plane = overlay_planes_.at(0).get();
 
-  composition.emplace_back(current_plane, primary_layer, this);
+  composition.emplace_back(current_plane, primary_layer, this, true);
   DisplayPlaneState &last_plane = composition.back();
   layer_begin++;
   ISURFACETRACE("Added layer in ForceGpuForAllLayers: %d \n",
@@ -658,11 +673,11 @@ void DisplayPlaneManager::ForceGpuForAllLayers(
 
   for (auto i = layer_begin; i != layer_end; ++i) {
     ISURFACETRACE("Added layer in ForceGpuForAllLayers: %d \n", i->GetZorder());
-    last_plane.AddLayer(&(*(i)));
+    last_plane.AddLayer(&(*(i)), true);
     i->SetLayerComposition(OverlayLayer::kGpu);
   }
 
-  if (last_plane.NeedsSurfaceAllocation())
+  while (last_plane.NeedsSurfaceAllocation())
     EnsureOffScreenTarget(last_plane);
   current_plane->SetInUse(true);
   // Check for Any display transform to be applied.
