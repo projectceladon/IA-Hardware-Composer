@@ -420,7 +420,8 @@ bool DrmDisplay::GetDisplayConfigs(uint32_t *num_configs, uint32_t *configs) {
 
   if (!configs) {
     prefer_display_mode = FindPreferedDisplayMode(modes_size);
-    perf_display_mode = FindPerformaceDisplayMode(modes_size);
+    // perf_display_mode = FindPerformaceDisplayMode(modes_size);
+    perf_display_mode = prefer_display_mode;
     if (prefer_display_mode == perf_display_mode)
       *num_configs = 1;
     else
