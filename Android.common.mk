@@ -123,9 +123,12 @@ LOCAL_CPPFLAGS += \
 	-Wno-unused-private-field \
 	-Wno-unused-function \
 	-Wno-unused-parameter \
-	-Wno-unused-variable
+	-Wno-unused-variable \
+	-DUSE_MUTEX
 
 LOCAL_CPPFLAGS += -DVA_SUPPORT_COLOR_RANGE
+
+LOCAL_CPPFLAGS += -DKVM_HWC_PROPERTY='"ro.graphics.hwcomposer.kvm"'
 
 ifeq ($(strip $(BOARD_USES_VULKAN)), true)
 LOCAL_SHARED_LIBRARIES += \
@@ -139,9 +142,19 @@ LOCAL_C_INCLUDES += \
 	$(LOCAL_PATH)/common/compositor/vk \
 	$(LOCAL_PATH)/../mesa/include
 else
+
+# iris driver flags
+ifneq ($(filter iris, $(BOARD_GPU_DRIVERS)),)
+$(warning "Iris driver not fully supported, instability or lower performance may occur!")
 LOCAL_CPPFLAGS += \
 	-DUSE_GL \
-	-DENABLE_RBC
+	-DDISABLE_EXPLICIT_SYNC
+else
+# i965 driver flags
+LOCAL_CPPFLAGS += \
+	-DUSE_GL
+endif
+
 endif
 
 ifneq ($(strip $(HWC_DISABLE_VA_DRIVER)), true)

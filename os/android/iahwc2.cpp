@@ -118,6 +118,11 @@ class IAHotPlugEventCallback : public hwcomposer::HotPlugCallback {
     int32_t status = static_cast<int32_t>(HWC2::Connection::Connected);
     if (!connected) {
       status = static_cast<int32_t>(HWC2::Connection::Disconnected);
+    } else {
+      hwc2_config_t default_config;
+      uint32_t num_configs = 1;
+      display_->GetDisplayConfigs(&num_configs, &default_config);
+      display_->SetActiveConfig(default_config);
     }
 
     IHOTPLUGEVENTTRACE(
@@ -153,6 +158,12 @@ HWC2::Error IAHWC2::Init() {
   char value[PROPERTY_VALUE_MAX];
   property_get("board.disable.explicit.sync", value, "0");
   disable_explicit_sync_ = atoi(value);
+
+/* Build wants to explicitly disable sync. */
+#ifdef DISABLE_EXPLICIT_SYNC
+  disable_explicit_sync_ = true;
+#endif
+
   if (disable_explicit_sync_)
     ALOGI("EXPLICIT SYNC support is disabled");
   else
@@ -219,14 +230,42 @@ static inline void supported(char const *func) {
 HWC2::Error IAHWC2::CreateVirtualDisplay(uint32_t width, uint32_t height,
                                          int32_t *format,
                                          hwc2_display_t *display) {
-  *display = (hwc2_display_t)(virtual_display_index_ + HWC_DISPLAY_VIRTUAL +
-                              VDS_OFFSET);
+  if (NULL == display) {
+    ALOGE("Pointer of display is NULL");
+    return HWC2::Error::BadDisplay;
+  }
+
+  if (NULL == format) {
+    ALOGE("Pointer of format is NULL");
+    return HWC2::Error::BadParameter;
+  }
+
+  uint32_t free_display_index = 0;
+
+  spin_lock_.lock();
+
+  for (uint32_t disp_index = 0; disp_index < virtual_display_index_;
+       disp_index++) {
+    auto it = virtual_displays_.find(disp_index);
+    if (it == virtual_displays_.end()) {
+      free_display_index = disp_index;
+      break;
+    }
+  }
+  if (!free_display_index) {
+    free_display_index = virtual_display_index_;
+    virtual_display_index_++;
+  }
+
+  *display =
+      (hwc2_display_t)(free_display_index + HWC_DISPLAY_VIRTUAL + VDS_OFFSET);
   std::unique_ptr<HwcDisplay> temp(new HwcDisplay());
-  temp->InitVirtualDisplay(device_.CreateVirtualDisplay(virtual_display_index_),
-                           width, height, virtual_display_index_,
+  temp->InitVirtualDisplay(device_.CreateVirtualDisplay(free_display_index),
+                           width, height, free_display_index,
                            disable_explicit_sync_);
-  virtual_displays_.emplace(virtual_display_index_, std::move(temp));
-  virtual_display_index_++;
+  virtual_displays_.emplace(free_display_index, std::move(temp));
+
+  spin_lock_.unlock();
 
   if (*format == HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED) {
     // fallback to RGBA_8888, align with framework requirement
@@ -242,11 +281,20 @@ HWC2::Error IAHWC2::DestroyVirtualDisplay(hwc2_display_t display) {
     return HWC2::Error::BadDisplay;
   }
 
-  device_.DestroyVirtualDisplay(display - HWC_DISPLAY_VIRTUAL - VDS_OFFSET);
-  virtual_displays_.at(display - HWC_DISPLAY_VIRTUAL - VDS_OFFSET)
-      .reset(nullptr);
-  virtual_displays_.erase(display - HWC_DISPLAY_VIRTUAL - VDS_OFFSET);
-  virtual_display_index_--;
+  if (~((uint32_t)display) == 0) {
+    return HWC2::Error::BadDisplay;
+  }
+
+  uint32_t display_id = (uint32_t)display - HWC_DISPLAY_VIRTUAL - VDS_OFFSET;
+  spin_lock_.lock();
+  auto it = virtual_displays_.find(display_id);
+  if (it != virtual_displays_.end()) {
+    device_.DestroyVirtualDisplay(display - HWC_DISPLAY_VIRTUAL - VDS_OFFSET);
+    virtual_displays_.at(display - HWC_DISPLAY_VIRTUAL - VDS_OFFSET)
+        .reset(nullptr);
+    virtual_displays_.erase(display - HWC_DISPLAY_VIRTUAL - VDS_OFFSET);
+  }
+  spin_lock_.unlock();
 
   return HWC2::Error::None;
 }
@@ -412,6 +460,7 @@ HWC2::Error IAHWC2::HwcDisplay::AcceptDisplayChanges() {
 
 HWC2::Error IAHWC2::HwcDisplay::CreateLayer(hwc2_layer_t *layer) {
   supported(__func__);
+
   uint64_t id = display_->AcquireId();
   layers_.emplace(static_cast<hwc2_layer_t>(id), IAHWC2::Hwc2Layer());
   layers_.at(id).XTranslateCoordinates(display_->GetXTranslation());
@@ -422,6 +471,9 @@ HWC2::Error IAHWC2::HwcDisplay::CreateLayer(hwc2_layer_t *layer) {
 
 HWC2::Error IAHWC2::HwcDisplay::DestroyLayer(hwc2_layer_t layer) {
   supported(__func__);
+  if (layers_.empty() && layer > 0)
+    return HWC2::Error::BadLayer;
+
   if (layers_.empty())
     return HWC2::Error::None;
 
@@ -619,6 +671,7 @@ HWC2::Error IAHWC2::HwcDisplay::PresentDisplay(int32_t *retire_fence) {
   bool use_client_layer = false;
   uint32_t client_z_order = 0;
   bool use_cursor_layer = false;
+  bool use_overlay_compose = false;
   uint32_t cursor_z_order = 0;
   IAHWC2::Hwc2Layer *cursor_layer;
   *retire_fence = -1;
@@ -630,6 +683,7 @@ HWC2::Error IAHWC2::HwcDisplay::PresentDisplay(int32_t *retire_fence) {
   // update from the client
   if (display_->PowerMode() == HWC2_POWER_MODE_DOZE_SUSPEND)
     return HWC2::Error::None;
+  size_t max_z_order = 0;
   for (std::pair<const hwc2_layer_t, IAHWC2::Hwc2Layer> &l : layers_) {
     if (l.second.IsCursorLayer()) {
       use_cursor_layer = true;
@@ -637,6 +691,15 @@ HWC2::Error IAHWC2::HwcDisplay::PresentDisplay(int32_t *retire_fence) {
       cursor_z_order = l.second.z_order();
       continue;
     }
+#ifndef FORCE_ALL_DEVICE_TYPE
+    if ((l.second.validated_type() == HWC2::Composition::Client) &&
+        (l.second.GetLayer()->GetNativeHandle() == NULL)) {
+      use_client_layer = true;
+      ICOMPOSITORTRACE(
+          "Skip clinet layer without buffer which composed by SurfaceFlinger");
+      continue;
+    }
+#endif
 
     if ((l.second.validated_type() != HWC2::Composition::SolidColor) &&
         (l.second.GetLayer()->GetNativeHandle() == NULL)) {
@@ -644,11 +707,19 @@ HWC2::Error IAHWC2::HwcDisplay::PresentDisplay(int32_t *retire_fence) {
           "HWC don't support layer without buffer if not in type SolidColor");
       continue;
     }
-
     switch (l.second.validated_type()) {
       case HWC2::Composition::Device:
       case HWC2::Composition::SolidColor:
+        use_overlay_compose = true;
         z_map.emplace(std::make_pair(l.second.z_order(), &l.second));
+        ICOMPOSITORTRACE(
+            "Add Device/SolidColor HWC2Layer[%d], displayFrame: %d, %d, %d, %d",
+            l.second.z_order(), l.second.GetLayer()->GetDisplayFrame().left,
+            l.second.GetLayer()->GetDisplayFrame().top,
+            l.second.GetLayer()->GetDisplayFrame().right,
+            l.second.GetLayer()->GetDisplayFrame().bottom);
+        if (l.second.z_order() > max_z_order)
+          max_z_order = l.second.z_order();
         break;
       case HWC2::Composition::Client:
         // Place it at the z_order of the highest client layer
@@ -663,23 +734,42 @@ HWC2::Error IAHWC2::HwcDisplay::PresentDisplay(int32_t *retire_fence) {
       client_layer_.GetLayer()->GetNativeHandle() &&
       client_layer_.GetLayer()->GetNativeHandle()->handle_) {
     z_map.emplace(std::make_pair(client_z_order, &client_layer_));
+    client_layer_.SetLayerZOrder(client_z_order);
+    ICOMPOSITORTRACE("Add Client HWC2Layer[%d], displayFrame: %d, %d, %d, %d",
+                     client_z_order,
+                     client_layer_.GetLayer()->GetDisplayFrame().left,
+                     client_layer_.GetLayer()->GetDisplayFrame().top,
+                     client_layer_.GetLayer()->GetDisplayFrame().right,
+                     client_layer_.GetLayer()->GetDisplayFrame().bottom);
+    if (client_z_order > max_z_order)
+      max_z_order = client_z_order;
   }
 
   // Place the cursor at the highest z-order
   if (use_cursor_layer) {
-    if (z_map.size()) {
-      if (z_map.rbegin()->second->z_order() > cursor_z_order)
-        cursor_z_order = z_map.rbegin()->second->z_order() + 1;
-      else if (client_z_order > cursor_z_order)
-        cursor_z_order = client_z_order + 1;
+    if (max_z_order > cursor_z_order) {
+      cursor_z_order = max_z_order + 1;
+    } else if (client_z_order > cursor_z_order) {
+      cursor_z_order = client_z_order + 1;
     }
-    z_map.emplace(std::make_pair(cursor_z_order, cursor_layer));
+    if (use_overlay_compose) {
+      z_map.emplace(std::make_pair(cursor_z_order, cursor_layer));
+      ICOMPOSITORTRACE("Add Cursor HWC2Layer[%d]", cursor_z_order);
+    }
   }
 
   std::vector<hwcomposer::HwcLayer *> layers;
   // now that they're ordered by z, add them to the composition
   for (std::pair<const uint32_t, IAHWC2::Hwc2Layer *> &l : z_map) {
     layers.emplace_back(l.second->GetLayer());
+    ICOMPOSITORTRACE(
+        "Add HwcLayer[%d][%d], displayFrame: %d, %d, %d, %d.  Blending: %d",
+        l.second->z_order(), l.second->validated_type(),
+        l.second->GetLayer()->GetDisplayFrame().left,
+        l.second->GetLayer()->GetDisplayFrame().top,
+        l.second->GetLayer()->GetDisplayFrame().right,
+        l.second->GetLayer()->GetDisplayFrame().bottom,
+        l.second->GetLayer()->GetBlending());
   }
 
   if (layers.empty() && display_->Type() != DisplayType::kLogical)
@@ -705,16 +795,21 @@ HWC2::Error IAHWC2::HwcDisplay::SetActiveConfig(hwc2_config_t config) {
     return HWC2::Error::BadConfig;
   }
 
+  int display_width = 0;
+  int display_height = 0;
+  display_->GetDisplayAttribute(config, HWCDisplayAttribute::kWidth,
+                                &display_width);
+  display_->GetDisplayAttribute(config, HWCDisplayAttribute::kHeight,
+                                &display_height);
+
   // Setup the client layer's dimensions
-  hwc_rect_t display_frame = {.left = 0,
-                              .top = 0,
-                              .right = static_cast<int>(display_->Width()),
-                              .bottom = static_cast<int>(display_->Height())};
+  hwc_rect_t display_frame = {
+      .left = 0, .top = 0, .right = display_width, .bottom = display_height};
   client_layer_.SetLayerDisplayFrame(display_frame);
   hwc_frect_t source_crop = {.left = 0.0f,
                              .top = 0.0f,
-                             .right = display_->Width() + 0.0f,
-                             .bottom = display_->Height() + 0.0f};
+                             .right = display_width + 0.0f,
+                             .bottom = display_height + 0.0f};
   client_layer_.SetLayerSourceCrop(source_crop);
 
   return HWC2::Error::None;
@@ -735,8 +830,49 @@ HWC2::Error IAHWC2::HwcDisplay::SetClientTarget(buffer_handle_t target,
 
 HWC2::Error IAHWC2::HwcDisplay::SetColorMode(int32_t mode) {
   supported(__func__);
+  if (mode < 0)
+    return HWC2::Error::BadParameter;
+
   // TODO: Use the parameter mode to set the color mode for the display to be
   // used.
+
+  return HWC2::Error::None;
+}
+
+HWC2::Error IAHWC2::HwcDisplay::SetColorModeWithRenderIntent(int32_t mode,
+                                                             int32_t intent) {
+  supported(__func__);
+  if (mode < 0)
+    return HWC2::Error::BadParameter;
+  if (intent < 0)
+    return HWC2::Error::BadParameter;
+
+  // TODO: Use the parameter mode to set the color mode for the display to be
+  // used.
+
+  return HWC2::Error::None;
+}
+
+HWC2::Error IAHWC2::HwcDisplay::GetRenderIntents(int32_t mode,
+                                                 uint32_t *outNumIntents,
+                                                 int32_t *outIntents) {
+  supported(__func__);
+  if (mode < 0) {
+    return HWC2::Error::BadParameter;
+  }
+
+  if (!outNumIntents) {
+    return HWC2::Error::BadParameter;
+  }
+
+  if (outIntents == NULL) {
+    *outNumIntents = GetNumRenderIntents();
+    return HWC2::Error::None;
+  }
+
+  if (mode == HAL_COLOR_MODE_NATIVE) {
+    *outIntents = HAL_RENDER_INTENT_COLORIMETRIC;
+  }
 
   return HWC2::Error::None;
 }
@@ -772,6 +908,8 @@ HWC2::Error IAHWC2::HwcDisplay::SetOutputBuffer(buffer_handle_t buffer,
 
 HWC2::Error IAHWC2::HwcDisplay::SetPowerMode(int32_t mode_in) {
   supported(__func__);
+  if (mode_in < 0)
+    return HWC2::Error::BadParameter;
   uint32_t power_mode = 0;
   auto mode = static_cast<HWC2::PowerMode>(mode_in);
   switch (mode) {
@@ -815,33 +953,204 @@ HWC2::Error IAHWC2::HwcDisplay::SetVsyncEnabled(int32_t enabled) {
 
 HWC2::Error IAHWC2::HwcDisplay::ValidateDisplay(uint32_t *num_types,
                                                 uint32_t *num_requests) {
+  std::map<uint32_t, hwc2_layer_t> z_map;
+  int layer_id = 1;
+  int Display_Composite_layers;
+  int avail_planes = display_->GetTotalOverlays();
+  bool include_video_layer = false;
+  bool force_all_device_type = false;
+
   supported(__func__);
   *num_types = 0;
   *num_requests = 0;
-  for (std::pair<const hwc2_layer_t, IAHWC2::Hwc2Layer> &l : layers_) {
-    IAHWC2::Hwc2Layer &layer = l.second;
 
-    switch (layer.sf_type()) {
-      case HWC2::Composition::Sideband:
+  /*
+   * If any video layer exist then all layers should set to DEVICE type.
+   * The HWC will try to separate planes or use VPP for video.
+   */
+  for (std::pair<const hwc2_layer_t, IAHWC2::Hwc2Layer> &l : layers_) {
+    if (l.second.IsVideoLayer()) {
+      include_video_layer = true;
+      break;
+    }
+  }
+
+#ifdef FORCE_ALL_DEVICE_TYPE
+  force_all_device_type = true;
+#endif
+
+#ifdef KVM_HWC_PROPERTY
+  /*
+   * On KVM + 4K display case, almost 30% frames are missed during video
+   * playback with VA-VPP composing and default CPU frequency setting.
+   * For optimizing video playback, disabling VA-VPP. and all layers will
+   * be composed in Cilent layer by SF (Only 1 plane is available on KVM)
+   */
+  if (include_video_layer && IsKvmPlatform()) {
+    uint32_t kvm_config = 0;
+    display_->GetActiveConfig(&kvm_config);
+    int32_t height = 0;
+    display_->GetDisplayAttribute(
+        kvm_config, hwcomposer::HWCDisplayAttribute::kHeight, &height);
+    if (height > 1080) {
+      include_video_layer = false;
+    }
+  }
+#endif
+  if (include_video_layer || force_all_device_type) {
+    for (std::pair<const hwc2_layer_t, IAHWC2::Hwc2Layer> &l : layers_) {
+      IAHWC2::Hwc2Layer &layer = l.second;
+
+      switch (layer.sf_type()) {
+        case HWC2::Composition::Sideband:
+          layer.set_validated_type(HWC2::Composition::Client);
+          ++*num_types;
+          break;
+        case HWC2::Composition::Cursor:
+          layer.set_validated_type(HWC2::Composition::Device);
+          ++*num_types;
+          break;
+        default:
+          if (disable_explicit_sync_ ||
+              display_->PowerMode() == HWC2_POWER_MODE_DOZE_SUSPEND) {
+            layer.set_validated_type(HWC2::Composition::Client);
+          } else {
+            layer.set_validated_type(layer.sf_type());
+          }
+          break;
+      }
+    }
+  } else {
+    for (std::pair<const hwc2_layer_t, IAHWC2::Hwc2Layer> &l : layers_)
+      l.second.set_validated_type(HWC2::Composition::Invalid);
+
+    for (std::pair<const hwc2_layer_t, IAHWC2::Hwc2Layer> &l : layers_) {
+      if (l.second.sf_type() == HWC2::Composition::Device ||
+          l.second.sf_type() == HWC2::Composition::SolidColor)
+        z_map.emplace(std::make_pair(l.second.z_order(), l.first));
+      else
+        l.second.set_validated_type(HWC2::Composition::Client);
+    }
+
+    /*
+     * If more layers then planes, save one plane
+     * for client composited layers
+     */
+    if (avail_planes < layers_.size())
+      avail_planes--;
+
+    for (std::pair<const uint32_t, hwc2_layer_t> &l : z_map) {
+      if (!avail_planes--)
+        break;
+#ifdef KVM_HWC_PROPERTY
+      if (IsKvmPlatform() && GpuDevice::getInstance().IsReservedDrmPlane())
+        break;
+#endif
+      if (layers_[l.second].sf_type() == HWC2::Composition::SolidColor) {
+        layers_[l.second].set_validated_type(HWC2::Composition::SolidColor);
+      } else {
+        layers_[l.second].set_validated_type(HWC2::Composition::Device);
+      }
+    }
+
+    for (std::pair<const uint32_t, hwc2_layer_t> &l : z_map) {
+      IAHWC2::Hwc2Layer &layer = layers_[l.second];
+      // We can only handle layers of Device type, send everything else to SF
+      if (layer.validated_type() != HWC2::Composition::Device &&
+          layer.validated_type() != HWC2::Composition::SolidColor) {
         layer.set_validated_type(HWC2::Composition::Client);
         ++*num_types;
-        break;
-      case HWC2::Composition::Cursor:
-        layer.set_validated_type(HWC2::Composition::Device);
-        ++*num_types;
-        break;
-      default:
-        if (disable_explicit_sync_ ||
-            display_->PowerMode() == HWC2_POWER_MODE_DOZE_SUSPEND) {
-          layer.set_validated_type(HWC2::Composition::Client);
-        } else {
-          layer.set_validated_type(layer.sf_type());
-        }
-        break;
+      }
     }
   }
 
   check_validate_display_ = true;
+  return HWC2::Error::None;
+}
+
+HWC2::Error IAHWC2::HwcDisplay::GetDisplayIdentificationData(
+    uint8_t *outPort, uint32_t *outDataSize, uint8_t *outData) {
+  supported(__func__);
+  ITRACE("Invoked IAHWC2::HwcDisplay::GetDisplayIdentificationData()");
+  if (outPort == NULL || outDataSize == NULL) {
+    ETRACE("Return BadParameter");
+    return HWC2::Error::BadParameter;
+  }
+
+  if (display_) {
+    if (display_->GetDisplayIdentificationData(outPort, outDataSize, outData)) {
+      (outData == NULL) ? ITRACE("outPort=%x, outDataSize=%x, outData=NULL",
+                                 outPort, outDataSize)
+                        : ITRACE("outPort=%x, outDataSize=%x, outData=%x",
+                                 outPort, outDataSize, outData);
+
+      return HWC2::Error::None;
+    }
+  }
+
+  ETRACE("Return BadDisplay");
+  return HWC2::Error::BadDisplay;
+}
+
+HWC2::Error IAHWC2::HwcDisplay::GetDisplayCapabilities(
+    uint32_t *outNumCapabilities, uint32_t *outCapabilities) {
+  supported(__func__);
+
+  if (!outNumCapabilities) {
+    ALOGE("BadParameter");
+    return HWC2::Error::BadParameter;
+  }
+
+  /* Return number of display capabilities only */
+  if (outCapabilities == NULL) {
+    *outNumCapabilities = getNumCapabilities();
+    return HWC2::Error::None;
+  }
+
+  *outCapabilities = 0;
+  *outNumCapabilities = 0;
+
+  /* Record miscellaneous display capabilities */
+  display_->GetDisplayCapabilities(outNumCapabilities, outCapabilities);
+  setNumCapabilities(*outNumCapabilities);
+
+  /* Record doze suspend display capability */
+  int32_t doze = 0;
+  GetDozeSupport(&doze);
+  if (doze == true) {
+    ++*outNumCapabilities;
+    setNumCapabilities(*outNumCapabilities);
+    *outCapabilities |= HWC2_DISPLAY_CAPABILITY_DOZE;
+  }
+
+  if (numCap_ == maxNumCap_) {
+    ALOGI("Maximum number of display capabilities reached");
+  }
+
+  ALOGI("outCapabilities=%d, outNumCapabilities=%d", *outCapabilities,
+        *outNumCapabilities);
+  return HWC2::Error::None;
+}
+
+HWC2::Error IAHWC2::HwcDisplay::GetDisplayedContentSamplingAttributes(
+    int32_t *format, int32_t *dataspace, uint8_t *supported_components) {
+  unsupported(__func__);
+  return HWC2::Error::None;
+}
+
+HWC2::Error IAHWC2::HwcDisplay::SetDisplayedContentSamplingEnabled(
+    int32_t enabled, uint8_t component_mask, uint64_t max_frames) {
+  unsupported(__func__);
+  return HWC2::Error::None;
+}
+
+HWC2::Error IAHWC2::HwcDisplay::GetDisplayedContentSample(uint64_t max_frames,
+                                                          uint64_t timestamp,
+                                                          uint64_t *frame_count,
+                                                          int32_t *samples_size,
+                                                          uint64_t **samples) {
+  unsupported(__func__);
+  *frame_count = 0;
   return HWC2::Error::None;
 }
 
@@ -873,7 +1182,6 @@ HWC2::Error IAHWC2::Hwc2Layer::SetLayerBlendMode(int32_t mode) {
 HWC2::Error IAHWC2::Hwc2Layer::SetLayerBuffer(buffer_handle_t buffer,
                                               int32_t acquire_fence) {
   supported(__func__);
-
   // The buffer and acquire_fence are handled elsewhere
   if (sf_type_ == HWC2::Composition::Client ||
       sf_type_ == HWC2::Composition::Sideband)
@@ -881,6 +1189,13 @@ HWC2::Error IAHWC2::Hwc2Layer::SetLayerBuffer(buffer_handle_t buffer,
 
   native_handle_.handle_ = buffer;
   hwc_layer_.SetNativeHandle(&native_handle_);
+
+  auto gr_handle = (struct cros_gralloc_handle *)buffer;
+  if ((gr_handle->consumer_usage & GRALLOC1_PRODUCER_USAGE_PROTECTED) ||
+      hwcomposer::IsSupportedMediaFormat(gr_handle->format)) {
+    hwc_layer_.MarkAsVideoLayer();
+  }
+
   if (acquire_fence > 0)
     hwc_layer_.SetAcquireFence(acquire_fence);
   return HWC2::Error::None;
@@ -983,8 +1298,12 @@ HWC2::Error IAHWC2::Hwc2Layer::SetLayerTransform(int32_t transform) {
 }
 
 HWC2::Error IAHWC2::Hwc2Layer::SetLayerVisibleRegion(hwc_region_t visible) {
+  supported(__func__);
   uint32_t num_rects = visible.numRects;
   hwcomposer::HwcRegion hwc_region;
+
+  if (!visible.rects)
+    return HWC2::Error::None;
 
   for (size_t rect = 0; rect < num_rects; ++rect) {
     hwc_region.emplace_back(visible.rects[rect].left, visible.rects[rect].top,
@@ -1000,6 +1319,18 @@ HWC2::Error IAHWC2::Hwc2Layer::SetLayerZOrder(uint32_t order) {
   supported(__func__);
 
   hwc_layer_.SetLayerZOrder(order);
+  return HWC2::Error::None;
+}
+
+HWC2::Error IAHWC2::Hwc2Layer::SetLayerColorTransform(const float *matrix) {
+  unsupported(__func__);
+  return HWC2::Error::None;
+}
+
+HWC2::Error IAHWC2::Hwc2Layer::SetLayerPerFrameMetadataBlobs(
+    uint32_t numElements, const int32_t *keys, const uint32_t *sizes,
+    const uint8_t *metadata) {
+  unsupported(__func__);
   return HWC2::Error::None;
 }
 
@@ -1128,6 +1459,16 @@ hwc2_function_pointer_t IAHWC2::HookDevGetFunction(struct hwc2_device * /*dev*/,
       return ToHook<HWC2_PFN_SET_COLOR_MODE>(
           DisplayHook<decltype(&HwcDisplay::SetColorMode),
                       &HwcDisplay::SetColorMode, int32_t>);
+    case HWC2::FunctionDescriptor::GetRenderIntents:
+      return ToHook<HWC2_PFN_GET_RENDER_INTENTS>(
+          DisplayHook<decltype(&HwcDisplay::GetRenderIntents),
+                      &HwcDisplay::GetRenderIntents, int32_t, uint32_t *,
+                      int32_t *>);
+    case HWC2::FunctionDescriptor::SetColorModeWithRenderIntent:
+      return ToHook<HWC2_PFN_SET_COLOR_MODE_WITH_RENDER_INTENT>(
+          DisplayHook<decltype(&HwcDisplay::SetColorModeWithRenderIntent),
+                      &HwcDisplay::SetColorModeWithRenderIntent, int32_t,
+                      int32_t>);
     case HWC2::FunctionDescriptor::SetColorTransform:
       return ToHook<HWC2_PFN_SET_COLOR_TRANSFORM>(
           DisplayHook<decltype(&HwcDisplay::SetColorTransform),
@@ -1148,6 +1489,32 @@ hwc2_function_pointer_t IAHWC2::HookDevGetFunction(struct hwc2_device * /*dev*/,
       return ToHook<HWC2_PFN_VALIDATE_DISPLAY>(
           DisplayHook<decltype(&HwcDisplay::ValidateDisplay),
                       &HwcDisplay::ValidateDisplay, uint32_t *, uint32_t *>);
+    case HWC2::FunctionDescriptor::GetDisplayIdentificationData:
+      return ToHook<HWC2_PFN_GET_DISPLAY_IDENTIFICATION_DATA>(
+          DisplayHook<decltype(&HwcDisplay::GetDisplayIdentificationData),
+                      &HwcDisplay::GetDisplayIdentificationData, uint8_t *,
+                      uint32_t *, uint8_t *>);
+    case HWC2::FunctionDescriptor::GetDisplayCapabilities:
+      return ToHook<HWC2_PFN_GET_DISPLAY_CAPABILITIES>(
+          DisplayHook<decltype(&HwcDisplay::GetDisplayCapabilities),
+                      &HwcDisplay::GetDisplayCapabilities, uint32_t *,
+                      uint32_t *>);
+    case HWC2::FunctionDescriptor::GetDisplayedContentSamplingAttributes:
+      return ToHook<HWC2_PFN_GET_DISPLAYED_CONTENT_SAMPLING_ATTRIBUTES>(
+          DisplayHook<decltype(
+                          &HwcDisplay::GetDisplayedContentSamplingAttributes),
+                      &HwcDisplay::GetDisplayedContentSamplingAttributes,
+                      int32_t *, int32_t *, uint8_t *>);
+    case HWC2::FunctionDescriptor::SetDisplayedContentSamplingEnabled:
+      return ToHook<HWC2_PFN_SET_DISPLAYED_CONTENT_SAMPLING_ENABLED>(
+          DisplayHook<decltype(&HwcDisplay::SetDisplayedContentSamplingEnabled),
+                      &HwcDisplay::SetDisplayedContentSamplingEnabled, int32_t,
+                      uint8_t, uint64_t>);
+    case HWC2::FunctionDescriptor::GetDisplayedContentSample:
+      return ToHook<HWC2_PFN_GET_DISPLAYED_CONTENT_SAMPLE>(
+          DisplayHook<decltype(&HwcDisplay::GetDisplayedContentSample),
+                      &HwcDisplay::GetDisplayedContentSample, uint64_t,
+                      uint64_t, uint64_t *, int32_t *, uint64_t **>);
 
     // Layer functions
     case HWC2::FunctionDescriptor::SetCursorPosition:
@@ -1206,6 +1573,15 @@ hwc2_function_pointer_t IAHWC2::HookDevGetFunction(struct hwc2_device * /*dev*/,
       return ToHook<HWC2_PFN_SET_LAYER_Z_ORDER>(
           LayerHook<decltype(&Hwc2Layer::SetLayerZOrder),
                     &Hwc2Layer::SetLayerZOrder, uint32_t>);
+    case HWC2::FunctionDescriptor::SetLayerColorTransform:
+      return ToHook<HWC2_PFN_SET_LAYER_COLOR_TRANSFORM>(
+          LayerHook<decltype(&Hwc2Layer::SetLayerColorTransform),
+                    &Hwc2Layer::SetLayerColorTransform, const float *>);
+    case HWC2::FunctionDescriptor::SetLayerPerFrameMetadataBlobs:
+      return ToHook<HWC2_PFN_SET_LAYER_PER_FRAME_METADATA_BLOBS>(
+          LayerHook<decltype(&Hwc2Layer::SetLayerPerFrameMetadataBlobs),
+                    &Hwc2Layer::SetLayerPerFrameMetadataBlobs, uint32_t,
+                    const int32_t *, const uint32_t *, const uint8_t *>);
     case HWC2::FunctionDescriptor::Invalid:
     default:
       return NULL;

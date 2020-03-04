@@ -487,7 +487,7 @@ bool PhysicalDisplay::PopulatePlanes(
 }
 
 bool PhysicalDisplay::TestCommit(
-    const std::vector<OverlayPlane> & /*commit_planes*/) const {
+    const DisplayPlaneStateList & /*commit_planes*/) const {
   ETRACE("TestCommit unimplemented in PhysicalDisplay.");
   return false;
 }
@@ -652,4 +652,20 @@ bool PhysicalDisplay::GetDisplayName(uint32_t *size, char *name) {
   strncpy(name, string.c_str(), *size);
   return true;
 }
+
+int PhysicalDisplay::GetTotalOverlays() const {
+  if (display_queue_)
+    return display_queue_->GetTotalOverlays();
+  else
+    return 0;
+}
+
+bool PhysicalDisplay::IsBypassClientCTM() const {
+  return bypassClientCTM_;
+}
+
+void PhysicalDisplay::GetDisplayCapabilities(uint32_t *numCapabilities,
+                                             uint32_t *capabilities) {
+}
+
 }  // namespace hwcomposer

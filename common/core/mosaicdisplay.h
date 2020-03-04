@@ -100,6 +100,13 @@ class MosaicDisplay : public NativeDisplay {
 
   bool EnableDRMCommit(bool enable) override;
 
+  bool GetDisplayIdentificationData(uint8_t *outPort, uint32_t *outDataSize,
+                                    uint8_t *outData) override;
+
+  bool IsBypassClientCTM() const;
+  void GetDisplayCapabilities(uint32_t *numCapabilities,
+                              uint32_t *capabilities) override;
+
   uint32_t GetXTranslation() override {
     return 0;
   }
