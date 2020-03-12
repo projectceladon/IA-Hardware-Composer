@@ -270,11 +270,11 @@ bool MosaicDisplay::Present(std::vector<HwcLayer *> &source_layers,
         continue;
       }
 
+      layer->SetUseForMosaic(true);
       layer->SetLeftConstraint(dlconstraint);
       layer->SetRightConstraint(drconstraint);
       layer->SetLeftSourceConstraint(left_constraint);
       layer->SetRightSourceConstraint(right_constraint);
-      layer->SetTotalDisplays(size - i);
 
       layers.emplace_back(layer);
     }
@@ -606,6 +606,31 @@ bool MosaicDisplay::GetDisplayName(uint32_t *size, char *name) {
   *size = std::min<uint32_t>(static_cast<uint32_t>(length), *size);
   strncpy(name, string.c_str(), *size);
   return true;
+}
+
+bool MosaicDisplay::GetDisplayIdentificationData(uint8_t *outPort,
+                                                 uint32_t *outDataSize,
+                                                 uint8_t *outData) {
+  return true;
+}
+
+bool MosaicDisplay::IsBypassClientCTM() const {
+  uint32_t size = physical_displays_.size();
+  for (uint32_t i = 0; i < size; i++) {
+    if (!physical_displays_.at(i)->IsBypassClientCTM()) {
+      return false;
+    }
+  }
+  return true;
+}
+
+void MosaicDisplay::GetDisplayCapabilities(uint32_t *numCapabilities,
+                                           uint32_t *capabilities) {
+  if (IsBypassClientCTM()) {
+    ++*numCapabilities;
+    *capabilities |= static_cast<uint32_t>(
+        HWCDisplayCapability::kDisplayCapabilitySkipClientColorTransform);
+  }
 }
 
 void MosaicDisplay::SetHDCPState(HWCContentProtection state,

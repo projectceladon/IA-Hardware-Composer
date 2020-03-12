@@ -61,6 +61,12 @@ class DrmDisplay : public PhysicalDisplay {
   bool GetDisplayConfigs(uint32_t *num_configs, uint32_t *configs) override;
   bool GetDisplayName(uint32_t *size, char *name) override;
 
+  void GetDisplayCapabilities(uint32_t *numCapabilities,
+                              uint32_t *capabilities) override;
+
+  bool GetDisplayIdentificationData(uint8_t *outPort, uint32_t *outDataSize,
+                                    uint8_t *outData) override;
+
   bool SetBroadcastRGB(const char *range_property) override;
 
   void SetHDCPState(HWCContentProtection state,
@@ -97,8 +103,7 @@ class DrmDisplay : public PhysicalDisplay {
   void SetDisplayAttribute(const drmModeModeInfo &mode_info);
   void SetFakeAttribute(const drmModeModeInfo &mode_info);
 
-  bool TestCommit(
-      const std::vector<OverlayPlane> &commit_planes) const override;
+  bool TestCommit(const DisplayPlaneStateList &commit_planes) const override;
 
   bool PopulatePlanes(
       std::vector<std::unique_ptr<DisplayPlane>> &overlay_planes) override;

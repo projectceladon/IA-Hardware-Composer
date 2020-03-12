@@ -187,7 +187,7 @@ void OverlayLayer::ValidateTransform(uint32_t transform,
 void OverlayLayer::TransformDamage(HwcLayer* layer, uint32_t max_height,
                                    uint32_t max_width) {
   const HwcRect<int>& surface_damage = layer->GetLayerDamage();
-  if (surface_damage.empty() || !layer->HasSurfaceDamageRegionChanged()) {
+  if (surface_damage.empty()) {
     surface_damage_ = surface_damage;
     return;
   }
@@ -305,7 +305,7 @@ void OverlayLayer::InitializeState(HwcLayer* layer,
       if (force_partial_clear) {
         state_ |= kForcePartialClear;
       }
-    } else if (!layer->IsCursorLayer()) {
+    } else {
       state_ |= kNeedsReValidation;
     }
   }
@@ -571,7 +571,7 @@ void OverlayLayer::ValidatePreviousFrameState(OverlayLayer* rhs,
 
   if (!layer->HasVisibleRegionChanged() && !content_changed &&
       surface_damage_.empty() && !layer->HasLayerContentChanged() &&
-      !(state_ & kNeedsReValidation)) {
+      !(state_ & kNeedsReValidation) && !layer->GetUseForMosaic()) {
     state_ &= ~kLayerContentChanged;
   }
 }

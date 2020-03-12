@@ -27,6 +27,7 @@
 #include <utility>
 
 #include "hwcservice.h"
+#include "spinlock.h"
 
 /*we have two extend displays,the seconde one's take over virtual
 display ID slot.to simplify ID management,start the virtual display
@@ -125,6 +126,10 @@ class IAHWC2 : public hwc2_device_t {
       return hwc_layer_.IsCursorLayer();
     }
 
+    bool IsVideoLayer() const {
+      return hwc_layer_.IsVideoLayer();
+    }
+
     // Layer hooks
     HWC2::Error SetCursorPosition(int32_t x, int32_t y);
     HWC2::Error SetLayerBlendMode(int32_t mode);
@@ -140,6 +145,11 @@ class IAHWC2 : public hwc2_device_t {
     HWC2::Error SetLayerTransform(int32_t transform);
     HWC2::Error SetLayerVisibleRegion(hwc_region_t visible);
     HWC2::Error SetLayerZOrder(uint32_t z);
+    HWC2::Error SetLayerColorTransform(const float *matrix);
+    HWC2::Error SetLayerPerFrameMetadataBlobs(uint32_t numElements,
+                                              const int32_t *keys,
+                                              const uint32_t *sizes,
+                                              const uint8_t *metadata);
 
    private:
     // sf_type_ stores the initial type given to us by surfaceflinger,
@@ -158,6 +168,23 @@ class IAHWC2 : public hwc2_device_t {
     HwcDisplay();
     HwcDisplay(const HwcDisplay &) = delete;
     HwcDisplay &operator=(const HwcDisplay &) = delete;
+
+    uint32_t numCap_ = 1;  // at least support the doze
+    uint32_t maxNumCap_ = HWC2_DISPLAY_CAPABILITY_DOZE -
+                          HWC2_DISPLAY_CAPABILITY_INVALID; /* last - first */
+
+    uint32_t getNumCapabilities() {
+      return numCap_;
+    }
+
+    void setNumCapabilities(uint32_t num) {
+      numCap_ = num;
+    }
+
+    uint32_t num_intents_ = 1;  // at least support the COLORIMETRIC
+    uint32_t GetNumRenderIntents() {
+      return num_intents_;
+    }
 
     HWC2::Error Init(hwcomposer::NativeDisplay *display, int display_index,
                      bool disable_explicit_sync, uint32_t scaling_mode);
@@ -208,11 +235,31 @@ class IAHWC2 : public hwc2_device_t {
     HWC2::Error SetClientTarget(buffer_handle_t target, int32_t acquire_fence,
                                 int32_t dataspace, hwc_region_t damage);
     HWC2::Error SetColorMode(int32_t mode);
+    HWC2::Error SetColorModeWithRenderIntent(int32_t mode, int32_t intent);
+    HWC2::Error GetRenderIntents(int32_t mode, uint32_t *outNumIntents,
+                                 int32_t *outIntents);
+
     HWC2::Error SetColorTransform(const float *matrix, int32_t hint);
     HWC2::Error SetOutputBuffer(buffer_handle_t buffer, int32_t release_fence);
     HWC2::Error SetPowerMode(int32_t mode);
     HWC2::Error SetVsyncEnabled(int32_t enabled);
     HWC2::Error ValidateDisplay(uint32_t *num_types, uint32_t *num_requests);
+    HWC2::Error GetDisplayIdentificationData(uint8_t *outPort,
+                                             uint32_t *outDataSize,
+                                             uint8_t *outData);
+    HWC2::Error GetDisplayCapabilities(uint32_t *outNumCapabilities,
+                                       uint32_t *outCapabilities);
+    HWC2::Error GetDisplayedContentSamplingAttributes(
+        int32_t *format, int32_t *dataspace, uint8_t *supported_components);
+    HWC2::Error SetDisplayedContentSamplingEnabled(int32_t enabled,
+                                                   uint8_t component_mask,
+                                                   uint64_t max_frames);
+    HWC2::Error GetDisplayedContentSample(uint64_t max_frames,
+                                          uint64_t timestamp,
+                                          uint64_t *frame_count,
+                                          int32_t *samples_size,
+                                          uint64_t **samples);
+
     Hwc2Layer &get_layer(hwc2_layer_t layer) {
       return layers_.at(layer);
     }
@@ -231,7 +278,12 @@ class IAHWC2 : public hwc2_device_t {
     bool disable_explicit_sync_;
     bool enable_nested_display_compose_;
     uint32_t scaling_mode_;
+    uint32_t planes_;
   };
+
+  HWC2::Error BadDisplay() {
+    return HWC2::Error::BadDisplay;
+  }
 
   static IAHWC2 *toIAHWC2(hwc2_device_t *dev) {
     return static_cast<IAHWC2 *>(dev);
@@ -253,6 +305,11 @@ class IAHWC2 : public hwc2_device_t {
   static int32_t DisplayHook(hwc2_device_t *dev, hwc2_display_t display_handle,
                              Args... args) {
     IAHWC2 *hwc = toIAHWC2(dev);
+
+    if (~(uint32_t)display_handle == 0) {
+      return static_cast<int32_t>(hwc->BadDisplay());
+    }
+
     if (display_handle == HWC_DISPLAY_PRIMARY) {
       HwcDisplay &display = hwc->primary_display_;
       return static_cast<int32_t>((display.*func)(std::forward<Args>(args)...));
@@ -282,6 +339,7 @@ class IAHWC2 : public hwc2_device_t {
   static int32_t LayerHook(hwc2_device_t *dev, hwc2_display_t display_handle,
                            hwc2_layer_t layer_handle, Args... args) {
     IAHWC2 *hwc = toIAHWC2(dev);
+
     if (display_handle == HWC_DISPLAY_PRIMARY) {
       HwcDisplay &display = hwc->primary_display_;
       Hwc2Layer &layer = display.get_layer(layer_handle);
@@ -329,6 +387,7 @@ class IAHWC2 : public hwc2_device_t {
   HwcDisplay primary_display_;
   std::map<uint32_t, std::unique_ptr<HwcDisplay>> virtual_displays_;
   uint32_t virtual_display_index_ = 0;
+  SpinLock spin_lock_;
 
   bool disable_explicit_sync_ = false;
   android::HwcService hwcService_;

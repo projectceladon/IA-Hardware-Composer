@@ -106,8 +106,7 @@ class PhysicalDisplay : public NativeDisplay, public DisplayPlaneHandler {
 
   bool IsConnected() const override;
 
-  bool TestCommit(
-      const std::vector<OverlayPlane> &commit_planes) const override;
+  bool TestCommit(const DisplayPlaneStateList &commit_planes) const override;
 
   bool PopulatePlanes(
       std::vector<std::unique_ptr<DisplayPlane>> &overlay_planes) override;
@@ -125,6 +124,10 @@ class PhysicalDisplay : public NativeDisplay, public DisplayPlaneHandler {
 
   bool GetDisplayConfigs(uint32_t *num_configs, uint32_t *configs) override;
   bool GetDisplayName(uint32_t *size, char *name) override;
+
+  bool IsBypassClientCTM() const;
+  void GetDisplayCapabilities(uint32_t *outNumCapabilities,
+                              uint32_t *outCapabilities) override;
 
   bool EnableDRMCommit(bool enable) override;
 
@@ -257,6 +260,8 @@ class PhysicalDisplay : public NativeDisplay, public DisplayPlaneHandler {
     return connection_state_ & kFakeConnected;
   }
 
+  int GetTotalOverlays() const override;
+
  private:
   bool UpdatePowerMode();
   void RefreshClones();
@@ -304,6 +309,7 @@ class PhysicalDisplay : public NativeDisplay, public DisplayPlaneHandler {
   std::vector<NativeDisplay *> cloned_displays_;
   std::vector<NativeDisplay *> clones_;
   uint32_t config_ = DEFAULT_CONFIG_ID;
+  bool bypassClientCTM_ = false;
 };
 
 }  // namespace hwcomposer
