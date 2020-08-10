@@ -16,7 +16,6 @@
 
 #include <gpudevice.h>
 
-#include <intel/intel_gvt.h>
 #include <sys/file.h>
 
 #include "mosaicdisplay.h"
@@ -68,7 +67,6 @@ bool GpuDevice::Initialize() {
   display_manager_->InitializeDisplayResources();
   display_manager_->StartHotPlugMonitor();
 
-  CheckGvtActive();
   HandleHWCSettings();
 
   if (reserve_plane_) {
@@ -98,10 +96,6 @@ FrameBufferManager *GpuDevice::GetFrameBufferManager() {
 
 uint32_t GpuDevice::GetFD() const {
   return display_manager_->GetFD();
-}
-
-bool GpuDevice::IsGvtActive() const {
-  return gvt_active_;
 }
 
 NativeDisplay *GpuDevice::GetDisplay(uint32_t display_id) {
@@ -830,34 +824,19 @@ void GpuDevice::InitializeFloatDisplay(
   }
 }
 
-void GpuDevice::CheckGvtActive() {
-  int fd = GetFD();
-  int gvt_active = 0;
-  int ret = drm_intel_get_gvt_active(fd, &gvt_active);
-  if (ret) {
-    ITRACE(
-        "Fail to get GVT active from kernel, set active as true by default.");
-    gvt_active_ = true;
-  } else {
-    if (gvt_active) {
-      gvt_active_ = true;
-      ITRACE("Running on vGPU (GVT-g) mode");
-    } else {
-      gvt_active_ = false;
-      ITRACE("Running on bare-metal mode");
-    }
-  }
-}
-
 void GpuDevice::HandleHWCSettings() {
-  // Handle config file reading
-  // check if running with GVT to decide load KVM/native config
+// Handle config file reading
+#ifndef KVM_HWC_PROPERTY
+  const char *hwc_dp_cfg_path = HWC_DISPLAY_INI_PATH;
+#else
+  // Get Kvm property to decide if need to load KVM config
   std::string hwc_dp_cfg_path_str;
-  if (IsGvtActive())
+  if (IsKvmPlatform())
     hwc_dp_cfg_path_str = KVM_HWC_DISPLAY_INI_PATH;
   else
     hwc_dp_cfg_path_str = HWC_DISPLAY_INI_PATH;
   const char *hwc_dp_cfg_path = hwc_dp_cfg_path_str.c_str();
+#endif
   ITRACE("Hwc display config file is %s", hwc_dp_cfg_path);
 
   bool use_logical = false;

@@ -54,7 +54,6 @@ endif
 LOCAL_SHARED_LIBRARIES := \
 	libcutils \
 	libdrm \
-	libdrm_intel \
 	libEGL \
 	libGLESv2 \
 	libhardware \
@@ -128,6 +127,8 @@ LOCAL_CPPFLAGS += \
 	-DUSE_MUTEX
 
 LOCAL_CPPFLAGS += -DVA_SUPPORT_COLOR_RANGE
+
+LOCAL_CPPFLAGS += -DKVM_HWC_PROPERTY='"ro.graphics.hwcomposer.kvm"'
 
 ifeq ($(strip $(BOARD_USES_VULKAN)), true)
 LOCAL_SHARED_LIBRARIES += \

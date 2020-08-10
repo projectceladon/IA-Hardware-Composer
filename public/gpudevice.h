@@ -53,8 +53,6 @@ class GpuDevice : public HWCThread {
 
   uint32_t GetFD() const;
 
-  bool IsGvtActive() const;
-
   NativeDisplay* GetDisplay(uint32_t display);
 
   NativeDisplay* CreateVirtualDisplay(uint32_t display_index);
@@ -118,8 +116,6 @@ class GpuDevice : public HWCThread {
 
  private:
   GpuDevice();
-
-  void CheckGvtActive();
 
   void ResetAllDisplayCommit(bool enable);
 
@@ -201,7 +197,6 @@ class GpuDevice : public HWCThread {
   SpinLock initialization_state_lock_;
   SpinLock drm_master_lock_;
   int lock_fd_ = -1;
-  bool gvt_active_ = false;
   friend class DrmDisplayManager;
 };
 
