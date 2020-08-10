@@ -685,8 +685,7 @@ void DrmDisplayManager::RemoveUnreservedPlanes() {
     if (!displays_.at(i)->IsConnected() || displays_.at(i)->IsPlanesUpdated())
       continue;
     std::vector<uint32_t> reserved_planes = device_.GetDisplayReservedPlanes(i);
-    if (!reserved_planes.empty() &&
-        reserved_planes.size() <= displays_.at(i)->GetTotalOverlays())
+    if (!reserved_planes.empty() && reserved_planes.size() < 4)
       displays_.at(i)->ReleaseUnreservedPlanes(reserved_planes);
     displays_.at(i)->SetPlanesUpdated(true);
   }
