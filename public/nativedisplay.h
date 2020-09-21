@@ -41,6 +41,13 @@ class VsyncCallback {
   virtual void Callback(uint32_t display, int64_t timestamp) = 0;
 };
 
+class Vsync_2_4Callback {
+ public:
+  virtual ~Vsync_2_4Callback() {
+  }
+  virtual void Callback(uint32_t display, int64_t timestamp, uint32_t vsyncPeriodNanos) = 0;
+};
+
 class RefreshCallback {
  public:
   virtual ~RefreshCallback() {

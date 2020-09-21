@@ -69,6 +69,16 @@ int VblankEventHandler::RegisterCallback(
   return 0;
 }
 
+int VblankEventHandler::RegisterCallback(
+    std::shared_ptr<Vsync_2_4Callback> callback, uint32_t display) {
+  spin_lock_.lock();
+  callback_2_4_ = callback;
+  display_ = display;
+  last_timestamp_ = -1;
+  spin_lock_.unlock();
+  return 0;
+}
+
 int VblankEventHandler::VSyncControl(bool enabled) {
   IPAGEFLIPEVENTTRACE("VblankEventHandler VSyncControl enabled %d", enabled);
   if (enabled_ == enabled)
@@ -87,12 +97,19 @@ void VblankEventHandler::HandlePageFlipEvent(unsigned int sec,
   int64_t timestamp = ((int64_t)sec * kOneSecondNs) + ((int64_t)usec * 1000);
   IPAGEFLIPEVENTTRACE("HandleVblankCallBack Frame Time %f",
                       static_cast<float>(timestamp - last_timestamp_) / (1000));
+  double vperiod = static_cast<double>(timestamp - last_timestamp_) / (1000));
   last_timestamp_ = timestamp;
 
   IPAGEFLIPEVENTTRACE("Callback called from HandlePageFlipEvent. %lu",
                       timestamp);
   spin_lock_.lock();
   if (enabled_ && callback_) {
+     if(abs(vperiod - vperiod_) > (1/90 - 1/75))
+      callback_2_4_->Callback(display_, timestamp, static_cast<uint32_t>(vperiod * 1000 * 1000));
+     else
+      callback_->Callback(display_, timestamp);
+}
+    vperiod_ = vperiod;
     callback_->Callback(display_, timestamp);
   }
   spin_lock_.unlock();

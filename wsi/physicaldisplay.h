@@ -201,6 +201,9 @@ class PhysicalDisplay : public NativeDisplay, public DisplayPlaneHandler {
    */
   virtual void UpdateDisplayConfig() = 0;
 
+
+  virtual void GetDisplayVsyncPeriod() = 0;
+
   /**
    * API for powering on the display
    */

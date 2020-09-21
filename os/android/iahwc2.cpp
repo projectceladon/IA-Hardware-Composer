@@ -57,6 +57,24 @@ class IAVsyncCallback : public hwcomposer::VsyncCallback {
   hwc2_function_pointer_t hook_;
 };
 
+class IAVsync_2_4Callback : public hwcomposer::Vsync_2_4Callback {
+ public:
+  IAVsync_2_4Callback(hwc2_callback_data_t data, hwc2_function_pointer_t hook)
+      : data_(data), hook_(hook) {
+  }
+
+  void Callback(uint32_t display, int64_t timestamp, uint32_t vsyncPeriodNanos) {
+    if (hook_ != NULL) {
+      auto hook = reinterpret_cast<HWC2_PFN_VSYNC>(hook_);
+      hook(data_, display, timestamp, vsyncPeriodNanos);
+    }
+  }
+
+ private:
+  hwc2_callback_data_t data_;
+  hwc2_function_pointer_t hook_;
+};
+
 class IARefreshCallback : public hwcomposer::RefreshCallback {
  public:
   IARefreshCallback(hwc2_callback_data_t data, hwc2_function_pointer_t hook)
@@ -335,6 +353,15 @@ HWC2::Error IAHWC2::RegisterCallback(int32_t descriptor,
 
       break;
     }
+    case HWC2::Callback::Vsync_2_4: {
+      primary_display_.RegisterVsync_2_4Callback(data, function);
+      for (size_t i = 0; i < size; ++i) {
+        IAHWC2::HwcDisplay *display = extended_displays_.at(i).get();
+        display->RegisterVsync_2_4Callback(data, function);
+      }
+
+      break;
+    }
     case HWC2::Callback::Refresh: {
       primary_display_.RegisterRefreshCallback(data, function);
       for (size_t i = 0; i < size; ++i) {
@@ -417,6 +444,19 @@ HWC2::Error IAHWC2::HwcDisplay::RegisterVsyncCallback(
   supported(__func__);
   auto callback = std::make_shared<IAVsyncCallback>(data, func);
   int ret = display_->RegisterVsyncCallback(std::move(callback),
+                                            static_cast<int>(handle_));
+  if (ret) {
+    ALOGE("Failed to register callback d=%" PRIu64 " ret=%d", handle_, ret);
+    return HWC2::Error::BadDisplay;
+  }
+  return HWC2::Error::None;
+}
+
+HWC2::Error IAHWC2::HwcDisplay::RegisterVsync_2_4Callback(
+    hwc2_callback_data_t data, hwc2_function_pointer_t func) {
+  supported(__func__);
+  auto callback = std::make_shared<IAVsync_2_4Callback>(data, func);
+  int ret = display_->RegisterVsync_2_4Callback(std::move(callback),
                                             static_cast<int>(handle_));
   if (ret) {
     ALOGE("Failed to register callback d=%" PRIu64 " ret=%d", handle_, ret);
@@ -813,6 +853,20 @@ HWC2::Error IAHWC2::HwcDisplay::SetActiveConfig(hwc2_config_t config) {
   client_layer_.SetLayerSourceCrop(source_crop);
 
   return HWC2::Error::None;
+}
+
+HWC2::Error IAHWC2::HwcDisplay::SetActiveConfigWithConstraints(
+  hwc2_config_t config,
+  hwc_vsync_period_change_constraints_t* vsyncPeriodChangeConstraints,
+  hwc_vsync_period_change_timeline_t* outTimeline
+  ) {
+  supported(__func__);
+  return SetActiveConfig(config);
+}
+
+HWC2::Error GetDisplayVsyncPeriod(hwc2_vsync_period_t* outVsyncPeriod) {
+  supported(__func__);
+  return display_->GetDisplayVsyncPeriod(outVsyncPeriod);
 }
 
 HWC2::Error IAHWC2::HwcDisplay::SetClientTarget(buffer_handle_t target,
@@ -1439,6 +1493,16 @@ hwc2_function_pointer_t IAHWC2::HookDevGetFunction(struct hwc2_device * /*dev*/,
       return ToHook<HWC2_PFN_SET_ACTIVE_CONFIG>(
           DisplayHook<decltype(&HwcDisplay::SetActiveConfig),
                       &HwcDisplay::SetActiveConfig, hwc2_config_t>);
+    case HWC2::FunctionDescriptor::SetActiveConfigWithConstraints:
+      return ToHook<HWC2_PFN_SET_ACTIVE_CONFIG_WITH_CONSTRAINTS>(
+          DisplayHook<decltype(&HwcDisplay::SetActiveConfig),
+                      &HwcDisplay::SetActiveConfig, hwc2_config_t,
+      hwc_vsync_period_change_constraints_t*,
+      hwc_vsync_period_change_timeline_t*>);
+    case HWC2::FunctionDescriptor::GetDisplayVsyncPeriod:
+      return ToHook<HWC2_FUNCTION_GET_DISPLAY_VSYNC_PERIOD>(DisplayHook<
+          decltype(&HwcDisplay::GetDisplayVsyncPeriod), &HwcDisplay::GetDisplayVsyncPeriod,
+          hwc2_display_t, hwc2_vsync_period_t*);
     case HWC2::FunctionDescriptor::SetClientTarget:
       return ToHook<HWC2_PFN_SET_CLIENT_TARGET>(DisplayHook<
           decltype(&HwcDisplay::SetClientTarget), &HwcDisplay::SetClientTarget,

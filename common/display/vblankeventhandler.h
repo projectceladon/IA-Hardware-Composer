@@ -45,6 +45,9 @@ class VblankEventHandler : public HWCThread {
   int RegisterCallback(std::shared_ptr<VsyncCallback> callback,
                        uint32_t display_id);
 
+  int RegisterCallback(std::shared_ptr<Vsync_2_4Callback> callback,
+                       uint32_t display_id);
+
   int VSyncControl(bool enabled);
 
  protected:
@@ -56,8 +59,10 @@ class VblankEventHandler : public HWCThread {
   // actually call the hook) and we don't want the memory freed until we're
   // done
   std::shared_ptr<VsyncCallback> callback_ = NULL;
+  std::shared_ptr<Vsync_2_4Callback> callback_2_4_ = NULL;
   SpinLock spin_lock_;
   uint32_t display_;
+  double vperiod;
   bool enabled_ = false;
 
   int fd_;

@@ -575,6 +575,7 @@ void DrmDisplay::UpdateDisplayConfig() {
   }
   flags_ |= DRM_MODE_ATOMIC_ALLOW_MODESET;
   SetDisplayAttribute(modes_[config_]);
+  vsync_period_ = modes_[config_].vrefresh;
   SPIN_UNLOCK(display_lock_);
 }
 
