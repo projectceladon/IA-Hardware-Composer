@@ -65,11 +65,20 @@ bool Compositor::Draw(DisplayPlaneStateList &comp_planes,
   std::vector<DrawState> media_state;
   std::vector<OverlayBuffer *> draw_buffers;
   std::vector<HwcRect<int>> display_frame;
+  size_t  element_size = 0;
 
   for (auto &layer : layers) {
     draw_buffers.emplace_back(layer.GetBuffer());
     display_frame.emplace_back(layer.GetDisplayFrame());
   }
+
+  for (DisplayPlaneState &plane : comp_planes) {
+    if (plane.NeedsOffScreenComposition())
+      element_size++;
+  }
+
+  if (element_size > 0)
+    draw_state.reserve(element_size);
 
   for (DisplayPlaneState &plane : comp_planes) {
     if (plane.Scanout()) {
