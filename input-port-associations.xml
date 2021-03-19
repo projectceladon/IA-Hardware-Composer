@@ -1,0 +1,7 @@
+<ports>
+    <port display="0" input="/ipc/remote-input0" />
+    <port display="1" input="/ipc/remote-input1" />
+    <port display="2" input="/ipc/remote-input2" />
+    <port display="3" input="/ipc/remote-input3" />
+    <port display="4" input="/ipc/remote-input4" />
+</ports>
