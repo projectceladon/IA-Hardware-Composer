@@ -887,8 +887,7 @@ HWC2::Error IAHWC2::HwcDisplay::GetDisplayVsyncPeriod(
 #define HWC2_DISPLAY_CONNECTION_TYPE_EXTERNAL 1
 HWC2::Error IAHWC2::HwcDisplay::GetDisplayConnectionType(uint32_t *outType) {
   supported(__func__);
-  *outType = HWC2_DISPLAY_CONNECTION_TYPE_EXTERNAL;
-  return HWC2::Error::None;
+  return HWC2::Error::Unsupported;
 }
 
 /**
@@ -907,15 +906,7 @@ HWC2::Error IAHWC2::HwcDisplay::SetAutoLowLatencyMode(bool on) {
 HWC2::Error IAHWC2::HwcDisplay::GetSupportedContentTypes(
     uint32_t *type_num, uint32_t *content_types) {
   supported(__func__);
-  if (content_types == NULL)
-    *type_num = 4;
-  else {
-    content_types[0] = DRM_MODE_CONTENT_TYPE_GRAPHICS;
-    content_types[1] = DRM_MODE_CONTENT_TYPE_PHOTO;
-    content_types[2] = DRM_MODE_CONTENT_TYPE_CINEMA;
-    content_types[3] = DRM_MODE_CONTENT_TYPE_GAME;
-  }
-  return HWC2::Error::None;
+  return HWC2::Error::Unsupported;
 }
 
 /**
@@ -924,7 +915,7 @@ HWC2::Error IAHWC2::HwcDisplay::GetSupportedContentTypes(
  */
 HWC2::Error IAHWC2::HwcDisplay::SetContentType(int32_t content_type) {
   supported(__func__);
-  return HWC2::Error::None;
+  return HWC2::Error::Unsupported;
 }
 
 HWC2::Error IAHWC2::HwcDisplay::SetClientTarget(buffer_handle_t target,
