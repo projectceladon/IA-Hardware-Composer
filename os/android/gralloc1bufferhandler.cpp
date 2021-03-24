@@ -94,6 +94,9 @@ bool Gralloc1BufferHandler::Init() {
   unlock_ = reinterpret_cast<GRALLOC1_PFN_UNLOCK>(
       gralloc1_dvc->getFunction(gralloc1_dvc, GRALLOC1_FUNCTION_UNLOCK));
 
+  free_buffer_ = reinterpret_cast<GRALLOC1_PFN_FREE_BUFFER>(
+      gralloc1_dvc->getFunction(gralloc1_dvc, GRALLOC1_FUNCTION_FREE_BUFFER));
+
   dimensions_ =
       reinterpret_cast<GRALLOC1_PFN_GET_DIMENSIONS>(gralloc1_dvc->getFunction(
           gralloc1_dvc, GRALLOC1_FUNCTION_GET_DIMENSIONS));
@@ -222,9 +225,11 @@ bool Gralloc1BufferHandler::ReleaseBuffer(HWCNativeHandle handle) const {
       reinterpret_cast<gralloc1_device_t *>(device_);
 
   if (handle->hwc_buffer_) {
-    release_(gralloc1_dvc, handle->handle_);
+    //release_(gralloc1_dvc, handle->handle_);
+    free_buffer_(gralloc1_dvc, (void*)(handle->handle_));
   } else if (handle->imported_handle_) {
-    release_(gralloc1_dvc, handle->imported_handle_);
+    //release_(gralloc1_dvc, handle->imported_handle_);
+    free_buffer_(gralloc1_dvc, (void*)(handle->imported_handle_));
   }
 
   if (handle->gralloc1_buffer_descriptor_t_ > 0)
