@@ -1339,6 +1339,10 @@ HWC2::Error IAHWC2::Hwc2Layer::SetLayerColor(hwc_color_t color) {
 
 HWC2::Error IAHWC2::Hwc2Layer::SetLayerCompositionType(int32_t type) {
   sf_type_ = static_cast<HWC2::Composition>(type);
+  if (!hwc_layer_) {
+    ETRACE("SurfaceFlinger is trying to set Composition Type to a Null layer");
+    return HWC2::Error::BadLayer;
+  }
   if (sf_type_ == HWC2::Composition::Cursor) {
     hwc_layer_.MarkAsCursorLayer();
   }
