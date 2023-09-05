@@ -101,7 +101,7 @@ uint32_t GpuDevice::GetFD() const {
 }
 
 bool GpuDevice::IsGvtActive() const {
-  return gvt_active_;
+  return true;
 }
 
 NativeDisplay *GpuDevice::GetDisplay(uint32_t display_id) {
