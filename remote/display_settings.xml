@@ -1,0 +1,25 @@
+<?xml version='1.0' encoding='utf-8' standalone='yes' ?>
+
+<display-settings>
+<config identifier="0" />
+<display
+  name="local:1"
+  shouldShowSystemDecors="true"
+  shouldShowIme="true" />
+<display
+  name="local:2"
+  shouldShowSystemDecors="true"
+  shouldShowIme="true" />
+<display
+  name="local:3"
+  shouldShowSystemDecors="true"
+  shouldShowIme="true" />
+<display
+  name="local:4"
+  shouldShowSystemDecors="true"
+  shouldShowIme="true" />
+<display
+  name="local:5"
+  shouldShowSystemDecors="true"
+  shouldShowIme="true" />
+</display-settings>
